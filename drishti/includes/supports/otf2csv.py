@@ -55,7 +55,7 @@ def otf2_to_csv(tracefile: str, csvfile: str) -> None:
             writer.writerow(['file_name', 'file_id', 'function', 'rank', 'start', 'end', 'size', 'offset'])
 
             for location, event in trace.events:
-                
+                #print(event) 
                 if isinstance(event, otf2.events.ProgramBegin):
                     
                     start_time = event.time
@@ -113,3 +113,10 @@ def otf2_to_csv(tracefile: str, csvfile: str) -> None:
                         writer.writerow([filename, fileid, function, rank.split()[2], start, end, size, offset])
 
                 else: continue
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Convert OTF2 trace to CSV.")
+    parser.add_argument("-t", "--tracefile", required=True, help="Path to the OTF2 trace file")
+    parser.add_argument("-o", "--csvfile", required=True, help="Path to the output CSV file")
+    args = parser.parse_args()
+
+    otf2_to_csv(args.tracefile, args.csvfile)

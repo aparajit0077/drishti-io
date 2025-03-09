@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
-
+import os
+import sys
+#import io
 import time
 import pandas as pd
+import traceback
 
 from rich import print
 from drishti.includes.module import *
@@ -12,38 +15,61 @@ def handler():
     console = init_console()
     insights_start_time = time.time()
 
-    if os.path.exists(args.log_path + '.intervals.csv') and os.path.exists(args.log_path + '.filemap.csv'):
-        print('Using parsed file: {}'.format(os.path.abspath(args.log_path + '.intervals.csv')))
-        print('Using parsed file: {}'.format(os.path.abspath(args.log_path + '.filemap.csv')))
-        df_intervals = pd.read_csv(args.log_path + '.intervals.csv')
-        df_file_map = pd.read_csv(args.log_path + '.filemap.csv')
-        file_map = {}
-        for index, row in df_file_map.iterrows():
-            file_map[row['file_id']] = row['file_name']
-    else:
-        otf2_to_csv(args.log_path + '/traces.otf2', args.log_path + '.intervals.csv')
-        df_intervals = pd.read_csv(args.log_path + '.intervals.csv')
-        file_map = df_intervals.groupby('file_id')['file_name'].first().to_dict()
+    try:
+        import io
+        import contextlib
+        #old_stdout = sys.stdout
+        #old_stderr = sys.stderr
+        #sys.stdout = io.StringIO()
+        #sys.stderr = io.StringIO()
 
-        def add_api(row):
-            if 'MPI' in row['function']:
-                return 'MPI-IO'
-            elif 'H5' in row['function']:
-                return 'H5F'
-            else:
-                return 'POSIX'
+        #intervals_csv = args.log_path + '.intervals.csv'
+        #ilemap_csv = args.log_path + '.filemap.csv'
+        #tau_file = os.path.join(args.log_path, 'traces.otf2')
 
-        def add_duration(row):
-            return row['end'] - row['start']
-        
-        df_intervals['api'] = df_intervals.apply(add_api, axis=1)
-        df_intervals['duration'] = df_intervals.apply(add_duration, axis=1)
-        
-        df_intervals.to_csv(args.log_path + '.intervals.csv', mode='w', index=False, header=True)
+        if os.path.exists(args.log_path + '.intervals.csv') and os.path.exists(args.log_path + '.filemap.csv'):
+            print('Using parsed file: {}'.format(os.path.abspath(args.log_path + '.intervals.csv')))
+            print('Using parsed file: {}'.format(os.path.abspath(args.log_path + '.filemap.csv')))
+            df_intervals = pd.read_csv(args.log_path + '.intervals.csv')
+            df_file_map = pd.read_csv(args.log_path + '.filemap.csv')
+            file_map = {}
+            for index, row in df_file_map.iterrows():
+                file_map[row['file_id']] = row['file_name']
+        else:
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                otf2_to_csv(args.log_path + '/traces.otf2', args.log_path + '.intervals.csv')
+            df_intervals = pd.read_csv(args.log_path + '.intervals.csv')
+            file_map = df_intervals.groupby('file_id')['file_name'].first().to_dict()
 
-        df_file_map = pd.DataFrame(list(file_map.items()), columns=['file_id', 'file_name'])
-        df_file_map.to_csv(args.log_path + '.filemap.csv', mode='w', index=False, header=True)
+            def add_api(row):
+                if 'MPI' in row['function']:
+                    return 'MPI-IO'
+                elif 'H5' in row['function']:
+                    return 'H5F'
+                else:
+                    return 'POSIX'
 
+            def add_duration(row):
+                return row['end'] - row['start']
+            
+            df_intervals['api'] = df_intervals.apply(add_api, axis=1)
+            df_intervals['duration'] = df_intervals.apply(add_duration, axis=1)
+            
+            df_intervals.to_csv(args.log_path + '.intervals.csv', mode='w', index=False, header=True)
+
+            df_file_map = pd.DataFrame(list(file_map.items()), columns=['file_id', 'file_name'])
+            df_file_map.to_csv(args.log_path + '.filemap.csv', mode='w', index=False, header=True)
+        #sys.stdout = old_stdout
+        #sys.stderr = old_stderr
+
+    except Exception as e:
+        #sys.stdout = sys.__stdout__
+        #sys.stderr = sys.__stderr__
+        print("TAU handler error:", e)
+        #traceback.print_exc()
+        return {}
+
+    
 
     modules = set(df_intervals['api'].unique())
     # Check usage of POSIX, and MPI-IO per file
@@ -81,6 +107,8 @@ def handler():
         total_size_posix -= total_size_mpiio
 
     total_size = total_size_stdio + total_size_posix + total_size_mpiio
+    total_transfer_size = total_size
+    total_transfer_time = df_intervals['duration'].sum() if 'duration' in df_intervals.columns else 0
 
     assert(total_size_stdio >= 0)
     assert(total_size_posix >= 0)
@@ -437,4 +465,50 @@ def handler():
 
     filename = '{}-summary.csv'.format(args.log_path)
     export_csv(filename)
+
+    final_counters = {
+        #"total_write_size_stdio": total_write_size_stdio,
+        #"total_read_size_stdio": total_read_size_stdio,
+        "total_size_stdio": total_size_stdio,
+        #"total_write_size_posix": total_write_size_posix,
+        #"total_read_size_posix": total_read_size_posix,
+        "total_size_posix": total_size_posix,
+        #"total_write_size_mpiio": total_write_size_mpiio,
+        #"total_read_size_mpiio": total_read_size_mpiio,
+        "total_size_mpiio": total_size_mpiio,
+        "total_size": total_size,
+        "total_reads": total_reads,
+        "total_writes": total_writes,
+        "total_operations": total_operations,
+        "total_read_size": total_read_size,
+        "total_written_size": total_written_size,
+        "total_reads_small": total_reads_small,
+        "total_writes_small": total_writes_small,
+        #"total_mem_not_aligned": total_mem_not_aligned,
+        #"total_file_not_aligned": total_file_not_aligned,
+        "max_read_offset": max_read_offset,
+        "max_write_offset": max_write_offset,
+        "read_consecutive": read_consecutive,
+        "read_sequential": read_sequential,
+        "read_random": read_random,
+        "write_consecutive": write_consecutive,
+        "write_sequential": write_sequential,
+        "write_random": write_random,
+        "total_shared_reads": total_shared_reads,
+        "total_shared_reads_small": total_shared_reads_small,
+        "total_shared_writes": total_shared_writes,
+        "total_shared_writes_small": total_shared_writes_small,
+        "total_transfer_size": total_transfer_size,
+        "total_transfer_time": total_transfer_time,
+        "mpiio_coll_reads": mpiio_coll_reads,
+        "mpiio_indep_reads": mpiio_indep_reads,
+        "total_mpiio_read_operations": total_mpiio_read_operations,
+        "mpiio_coll_writes": mpiio_coll_writes,
+        "mpiio_indep_writes": mpiio_indep_writes,
+        "total_mpiio_write_operations": total_mpiio_write_operations,
+        "mpiio_nb_reads": mpiio_nb_reads,
+        "mpiio_nb_writes": mpiio_nb_writes,
+    }
+
+    return final_counters
 

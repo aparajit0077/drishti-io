@@ -3,6 +3,8 @@
 import os
 import time
 import pandas as pd
+import io
+import sys
 from recorder_utils import RecorderReader
 from recorder_utils.build_offset_intervals import build_offset_intervals
 from drishti.includes.module import *
@@ -41,55 +43,72 @@ def init_df_posix_recordes(reader):
 
 
 def handler():
-    df_intervals = None
-    df_posix_records = None
-    df_file_map = None
-    file_map = None
+    if os.path.isdir(args.log_path):
+        try:
 
-    if os.path.exists(args.log_path + '.intervals.csv') and os.path.exists(args.log_path + '.records.csv') and os.path.exists(args.log_path + '.filemap.csv'):
-        print('Using parsed file: {}'.format(os.path.abspath(args.log_path + '.intervals.csv')))
-        print('Using parsed file: {}'.format(os.path.abspath(args.log_path + '.records.csv')))
-        print('Using parsed file: {}'.format(os.path.abspath(args.log_path + '.filemap.csv')))
-        df_intervals = pd.read_csv(args.log_path + '.intervals.csv')
-        df_posix_records = pd.read_csv(args.log_path + '.records.csv')
-        df_file_map = pd.read_csv(args.log_path + '.filemap.csv')
-        file_map = {}
-        for index, row in df_file_map.iterrows():
-            file_map[row['file_id']] = row['file_name']
-    else:
-        reader = RecorderReader(args.log_path)
-        df_intervals = build_offset_intervals(reader)
-        df_posix_records = init_df_posix_recordes(reader)
+            old_stdout = sys.stdout
+            sys.stdout = io.StringIO()
+            df_intervals = None
+            df_posix_records = None
+            df_file_map = None
+            file_map = None
 
-        file_map = get_accessed_files(reader)
-
-        def add_api(row):
-            if 'MPI' in row['function']:
-                return 'MPI-IO'
-            elif 'H5' in row['function']:
-                return 'H5F'
+            if os.path.exists(args.log_path + '.intervals.csv') and os.path.exists(args.log_path + '.records.csv') and os.path.exists(args.log_path + '.filemap.csv'):
+                print('Using parsed file: {}'.format(os.path.abspath(args.log_path + '.intervals.csv')))
+                print('Using parsed file: {}'.format(os.path.abspath(args.log_path + '.records.csv')))
+                print('Using parsed file: {}'.format(os.path.abspath(args.log_path + '.filemap.csv')))
+                df_intervals = pd.read_csv(args.log_path + '.intervals.csv')
+                df_posix_records = pd.read_csv(args.log_path + '.records.csv')
+                df_file_map = pd.read_csv(args.log_path + '.filemap.csv')
+                file_map = {}
+                for index, row in df_file_map.iterrows():
+                    file_map[row['file_id']] = row['file_name']
             else:
-                return 'POSIX'
+                reader = RecorderReader(args.log_path)
+                df_intervals = build_offset_intervals(reader)
+                df_posix_records = init_df_posix_recordes(reader)
 
-        def add_duration(row):
-            return row['end'] - row['start']
-        
-        df_intervals['api'] = df_intervals.apply(add_api, axis=1)
-        df_intervals['duration'] = df_intervals.apply(add_duration, axis=1)
-        df_posix_records['duration'] = df_posix_records.apply(add_duration, axis=1)
+                file_map = get_accessed_files(reader)
 
-        df_intervals.to_csv(args.log_path + '.intervals.csv', mode='w', index=False, header=True)
-        df_posix_records.to_csv(args.log_path + '.records.csv', mode='w', index=False, header=True)
+                def add_api(row):
+                    if 'MPI' in row['function']:
+                        return 'MPI-IO'
+                    elif 'H5' in row['function']:
+                        return 'H5F'
+                    else:
+                        return 'POSIX'
 
-        df_file_map = pd.DataFrame(list(file_map.items()), columns=['file_id', 'file_name'])
-        df_file_map.to_csv(args.log_path + '.filemap.csv', mode='w', index=False, header=True)
+                def add_duration(row):
+                    return row['end'] - row['start']
+                
+                df_intervals['api'] = df_intervals.apply(add_api, axis=1)
+                df_intervals['duration'] = df_intervals.apply(add_duration, axis=1)
+                df_posix_records['duration'] = df_posix_records.apply(add_duration, axis=1)
 
-    if args.split_files:
-        for fid in file_map:
-            process_helper(file_map, df_intervals[(df_intervals['file_id'] == fid)], 
-                           df_posix_records[(df_posix_records['fname'] == file_map[fid])], fid)
+                df_intervals.to_csv(args.log_path + '.intervals.csv', mode='w', index=False, header=True)
+                df_posix_records.to_csv(args.log_path + '.records.csv', mode='w', index=False, header=True)
+
+                df_file_map = pd.DataFrame(list(file_map.items()), columns=['file_id', 'file_name'])
+                df_file_map.to_csv(args.log_path + '.filemap.csv', mode='w', index=False, header=True)
+
+            if args.split_files:
+                final_counters = {}
+                for fid in file_map:
+                    counters = process_helper(file_map, df_intervals[(df_intervals['file_id'] == fid)], 
+                                df_posix_records[(df_posix_records['fname'] == file_map[fid])], fid)
+                    final_counters.update(counters)
+            else:
+                final_counters = process_helper(file_map, df_intervals, df_posix_records)
+            sys.stdout = old_stdout
+            return final_counters
+
+        except Exception as e:
+            sys.stdout = sys.__stdout__  # Ensure stdout is restored.
+            print("Recorder handler error:", e)
+            return {}
     else:
-        process_helper(file_map, df_intervals, df_posix_records)
+        return{}
+    
 
 
 def process_helper(file_map, df_intervals, df_posix_records, fid=None):
@@ -596,4 +615,50 @@ def process_helper(file_map, df_intervals, df_posix_records, fid=None):
     else:
         filename = '{}-summary.csv'.format(args.log_path)
     export_csv(filename)
+
+    final_counters = {
+        #"total_write_size_stdio": total_write_size_stdio,
+        #"total_read_size_stdio": total_read_size_stdio,
+        "total_size_stdio": total_size_stdio,
+        #"total_write_size_posix": total_write_size_posix,
+        #"total_read_size_posix": total_read_size_posix,
+        "total_size_posix": total_size_posix,
+        #"total_write_size_mpiio": total_write_size_mpiio,
+        #"total_read_size_mpiio": total_read_size_mpiio,
+        "total_size_mpiio": total_size_mpiio,
+        "total_size": total_size,
+        "total_reads": total_reads,
+        "total_writes": total_writes,
+        "total_operations": total_operations,
+        "total_read_size": total_read_size,
+        "total_written_size": total_written_size,
+        "total_reads_small": total_reads_small,
+        "total_writes_small": total_writes_small,
+        #"total_mem_not_aligned": total_mem_not_aligned,
+        #"total_file_not_aligned": total_file_not_aligned,
+        "max_read_offset": max_read_offset,
+        "max_write_offset": max_write_offset,
+        "read_consecutive": read_consecutive,
+        "read_sequential": read_sequential,
+        "read_random": read_random,
+        "write_consecutive": write_consecutive,
+        "write_sequential": write_sequential,
+        "write_random": write_random,
+        "total_shared_reads": total_shared_reads,
+        "total_shared_reads_small": total_shared_reads_small,
+        "total_shared_writes": total_shared_writes,
+        "total_shared_writes_small": total_shared_writes_small,
+        "total_transfer_size": total_transfer_size,
+        "total_transfer_time": total_transfer_time,
+        "mpiio_coll_reads": mpiio_coll_reads,
+        "mpiio_indep_reads": mpiio_indep_reads,
+        "total_mpiio_read_operations": total_mpiio_read_operations,
+        "mpiio_coll_writes": mpiio_coll_writes,
+        "mpiio_indep_writes": mpiio_indep_writes,
+        "total_mpiio_write_operations": total_mpiio_write_operations,
+        "mpiio_nb_reads": mpiio_nb_reads,
+        "mpiio_nb_writes": mpiio_nb_writes,
+    }
+
+    return final_counters
 
