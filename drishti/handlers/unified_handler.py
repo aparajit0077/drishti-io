@@ -19,3 +19,14 @@ def handler(args):
     else:
         print("Invalid log path provided. Must be either a file or a directory.")
         return {}
+    
+def determine_trace_type(log_path):
+    if os.path.isfile(log_path):
+        return "darshan"
+    elif os.path.isdir(log_path):
+        tau_trace = os.path.join(log_path, "traces.otf2")
+        return "tau" if os.path.exists(tau_trace) else "recorder"
+    else:
+        return None
+
+__all__ = ["handler", "determine_trace_type"]

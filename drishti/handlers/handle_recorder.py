@@ -2,6 +2,7 @@
 
 import os
 import time
+import datetime
 import pandas as pd
 import io
 import sys
@@ -41,13 +42,88 @@ def init_df_posix_recordes(reader):
     df_posix_records = pd.DataFrame(records, columns=head)
     return df_posix_records
 
+def display_drishti_output(total_files, total_files_stdio, total_files_posix, total_files_mpiio,
+                                 df_intervals):
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich import box
+
+    console = Console(record=True)
+
+    # Ensure that file count values are numbers.
+    try:
+        total_files_posix = int(total_files_posix)
+    except Exception:
+        total_files_posix = 0
+    try:
+        total_files_mpiio = int(total_files_mpiio)
+    except Exception:
+        total_files_mpiio = 0
+
+    # Get number of processes from the df_intervals, if available.
+    num_procs = df_intervals['rank'].nunique() if 'rank' in df_intervals.columns else 0
+
+    # Build header text
+    if args.split_files:
+        # For split-files mode, assume fid is available.
+        # (If fid is not defined, you can set a default value.)
+        fid = "?"  # Replace with actual fid if available.
+        header = '\n'.join([
+            ' [b]RECORDER[/b]:       [white]{}[/white]'.format(os.path.basename(args.log_path)),
+            ' [b]FILE[/b]:          [white]{} ({})[/white]'.format(file_map.get(fid, "Unknown"), fid),
+            ' [b]PROCESSES[/b]:       [white]{}[/white]'.format(num_procs)
+        ])
+    else:
+        header = '\n'.join([
+            ' [b]RECORDER[/b]:       [white]{}[/white]'.format(os.path.basename(args.log_path)),
+            ' [b]FILES[/b]:          [white]{} files ({} use STDIO, {} use POSIX, {} use MPI-IO)[/white]'.format(
+                total_files,
+                total_files_stdio,
+                total_files_posix - total_files_mpiio,  # Safe subtraction since both are numbers.
+                total_files_mpiio
+            ),
+            ' [b]PROCESSES[/b]:       [white]{}[/white]'.format(num_procs)
+        ])
+
+    # Print header panel
+    console.print(
+        Panel(
+            header,
+            title='[b][slate_blue3]DRISHTI[/slate_blue3] v.0.5[/b]',
+            title_align='left',
+            subtitle='[red][b]{} critical issues[/b][/red], [orange1][b]{} warnings[/b][/orange1], and [white][b]{} recommendations[/b][/white]'.format(
+                insights_total[HIGH],
+                insights_total[WARN],
+                insights_total[RECOMMENDATIONS]
+            ),
+            subtitle_align='left',
+            padding=1
+        )
+    )
+
+    # Display content and thresholds panels.
+    display_content(console)
+    display_thresholds(console)
+    
+    # For footer, since we do not use job_start/job_end, we can simply display the current time.
+    current_time = datetime.datetime.now()
+    console.print(
+        Panel(
+            'Drishti report generated at {}.'.format(current_time.strftime("%Y-%m-%d %H:%M:%S")),
+            box=box.SIMPLE
+        )
+    )
+
+    return console
+
+
 
 def handler():
     if os.path.isdir(args.log_path):
         try:
 
-            old_stdout = sys.stdout
-            sys.stdout = io.StringIO()
+            #old_stdout = sys.stdout
+            #sys.stdout = io.StringIO()
             df_intervals = None
             df_posix_records = None
             df_file_map = None
@@ -59,6 +135,12 @@ def handler():
                 print('Using parsed file: {}'.format(os.path.abspath(args.log_path + '.filemap.csv')))
                 df_intervals = pd.read_csv(args.log_path + '.intervals.csv')
                 df_posix_records = pd.read_csv(args.log_path + '.records.csv')
+                
+                if "size" in df_intervals.columns:
+                    df_intervals["size"] = pd.to_numeric(df_intervals["size"], errors="coerce").fillna(0)
+                #df_intervals["size"] = pd.to_numeric(df_intervals["size"], errors="coerce").fillna(0)
+                
+                
                 df_file_map = pd.read_csv(args.log_path + '.filemap.csv')
                 file_map = {}
                 for index, row in df_file_map.iterrows():
@@ -99,11 +181,11 @@ def handler():
                     final_counters.update(counters)
             else:
                 final_counters = process_helper(file_map, df_intervals, df_posix_records)
-            sys.stdout = old_stdout
+            #sys.stdout = old_stdout
             return final_counters
 
         except Exception as e:
-            sys.stdout = sys.__stdout__  # Ensure stdout is restored.
+            #sys.stdout = sys.__stdout__  # Ensure stdout is restored.
             print("Recorder handler error:", e)
             return {}
     else:
@@ -118,6 +200,38 @@ def process_helper(file_map, df_intervals, df_posix_records, fid=None):
 
     console = init_console()
 
+    df_intervals['start'] = pd.to_numeric(df_intervals['start'], errors='coerce')
+    df_intervals['end'] = pd.to_numeric(df_intervals['end'], errors='coerce')
+
+    if 'size' in df_intervals.columns:
+        df_intervals['size'] = pd.to_numeric(df_intervals['size'], errors='coerce').fillna(0)
+
+    raw_start = df_intervals['start'].min()
+    raw_end = df_intervals['end'].max()
+
+    try:
+        job_start = datetime.datetime.fromtimestamp(float(raw_start))
+    except Exception as e:
+        print("Conversion error for job_start:", e)
+        job_start = datetime.datetime.now()
+
+    try:
+        job_end = datetime.datetime.fromtimestamp(float(raw_end))
+    except Exception as e:
+        print("Conversion error for job_end:", e)
+        job_end = datetime.datetime.now()
+
+    print("DEBUG: job_start =", job_start, type(job_start))
+    print("DEBUG: job_end =", job_end, type(job_end))    
+    #NUMBER_OF_COMPUTE_NODES = int(df_intervals['rank'].nunique())
+    hints = []
+    job = {
+        "job": {
+            "jobid": os.path.basename(args.log_path),
+            #"nprocs": NUMBER_OF_COMPUTE_NODES
+        }
+    }
+
     modules = set(df_intervals['api'].unique())
     # Check usage of POSIX, and MPI-IO per file
     total_size_stdio = 0
@@ -126,14 +240,40 @@ def process_helper(file_map, df_intervals, df_posix_records, fid=None):
     total_size = 0
 
     total_files = len(file_map)
-    total_files_stdio = 0
-    total_files_posix = 0
-    total_files_mpiio = 0
+    count_stdio = 0
+    count_posix = 0
+    count_mpiio = 0
+    #total_files_stdio = 0
+    #total_files_posix = 0
+    #total_files_mpiio = 0
 
     if args.split_files:
         total_size_stdio = df_intervals[(df_intervals['api'] == 'STDIO')]['size'].sum()
         total_size_posix = df_intervals[(df_intervals['api'] == 'POSIX')]['size'].sum()
         total_size_mpiio = df_intervals[(df_intervals['api'] == 'MPI-IO')]['size'].sum()
+    else:
+        for id in file_map.keys():
+            df_file = df_intervals[df_intervals['file_id'] == id]
+            df_stdio = df_file[df_file['api'] == 'STDIO']
+            df_posix = df_file[df_file['api'] == 'POSIX']
+            df_mpiio = df_file[df_file['api'] == 'MPI-IO']
+
+            if not df_stdio.empty:
+                count_stdio += 1
+                total_size_stdio += df_stdio['size'].sum()
+            if not df_posix.empty:
+                count_posix += 1
+                total_size_posix += df_posix['size'].sum()
+            if not df_mpiio.empty:
+                count_mpiio += 1
+                total_size_mpiio += df_mpiio['size'].sum()
+
+    # Ensure the file count variables are integers.
+    total_files_stdio = int(count_stdio)
+    total_files_posix = int(count_posix)
+    total_files_mpiio = int(count_mpiio)
+    
+    """
     else:
         for id in file_map.keys():
             df_intervals_in_one_file = df_intervals[(df_intervals['file_id'] == id)]
@@ -154,6 +294,11 @@ def process_helper(file_map, df_intervals, df_posix_records, fid=None):
                 total_size_mpiio += df_mpiio_intervals_in_one_file['size'].sum()       
 
 
+    total_files_stdio = int(total_files_stdio)
+    total_files_posix = int(total_files_posix)
+    total_files_mpiio = int(total_files_mpiio)
+    """
+    
     # Since POSIX will capture both POSIX-only accesses and those comming from MPI-IO, we can subtract those
     if total_size_posix > 0 and total_size_posix >= total_size_mpiio:
         total_size_posix -= total_size_mpiio
@@ -164,14 +309,17 @@ def process_helper(file_map, df_intervals, df_posix_records, fid=None):
     assert(total_size_posix >= 0)
     assert(total_size_mpiio >= 0)
 
-    check_stdio(total_size, total_size_stdio)
-    check_mpiio(modules)
+    #check_stdio(total_size, total_size_stdio)
+    #check_mpiio(modules)
 
     #########################################################################################################################################################################
 
     if df_intervals['api'].eq('POSIX').any():
-        df_posix = df_intervals[(df_intervals['api'] == 'POSIX')]
+        
+        #df_posix = df_intervals[(df_intervals['api'] == 'POSIX')]
 
+        df_posix = df_intervals[(df_intervals['api'] == 'POSIX')].copy()
+        df_posix["size"] = pd.to_numeric(df_posix["size"], errors="coerce").fillna(0)
         #########################################################################################################################################################################
 
         # Get number of write/read operations
@@ -182,14 +330,14 @@ def process_helper(file_map, df_intervals, df_posix_records, fid=None):
         total_operations = total_writes + total_reads 
 
         # To check whether the application is write-intersive or read-intensive we only look at the POSIX level and check if the difference between reads and writes is larger than 10% (for more or less), otherwise we assume a balance
-        check_operation_intensive(total_operations, total_reads, total_writes)
+        #check_operation_intensive(total_operations, total_reads, total_writes)
 
         total_read_size = df_posix[(df_posix['function'].str.contains('read'))]['size'].sum()
         total_written_size = df_posix[~(df_posix['function'].str.contains('read'))]['size'].sum()
 
         total_size = total_written_size + total_read_size
 
-        check_size_intensive(total_size, total_read_size, total_written_size)
+        #check_size_intensive(total_size, total_read_size, total_written_size)
 
         #########################################################################################################################################################################
 
@@ -197,6 +345,12 @@ def process_helper(file_map, df_intervals, df_posix_records, fid=None):
 
         total_reads_small = len(df_posix[(df_posix['function'].str.contains('read')) & (df_posix['size'] < thresholds['small_bytes'][0])])
         total_writes_small = len(df_posix[~(df_posix['function'].str.contains('read')) & (df_posix['size'] < thresholds['small_bytes'][0])])
+
+        df_writes = df_posix[~(df_posix['function'].str.contains('read'))]
+        max_bytes_written = df_writes["size"].max()
+        min_bytes_written = df_writes["size"].min()
+        print("DEBUG: max_bytes_written =", max_bytes_written)
+        print("DEBUG: min_bytes_written =", min_bytes_written)
 
         if args.split_files:
             detected_files = pd.DataFrame()
@@ -210,7 +364,7 @@ def process_helper(file_map, df_intervals, df_posix_records, fid=None):
             column_names = ['id', 'total_reads', 'total_writes']
             detected_files = pd.DataFrame(detected_files, columns=column_names)
 
-        check_small_operation(total_reads, total_reads_small, total_writes, total_writes_small, detected_files, modules, file_map)
+        #check_small_operation(total_reads, total_reads_small, total_writes, total_writes_small, detected_files, modules, file_map)
 
         #########################################################################################################################################################################
 
@@ -224,7 +378,7 @@ def process_helper(file_map, df_intervals, df_posix_records, fid=None):
         max_read_offset = df_posix[(df_posix['function'].str.contains('read'))]['offset'].max()
         max_write_offset = df_posix[~(df_posix['function'].str.contains('read'))]['offset'].max()
         
-        check_traffic(max_read_offset, total_read_size, max_write_offset, total_written_size)
+        #check_traffic(max_read_offset, total_read_size, max_write_offset, total_written_size)
 
         #########################################################################################################################################################################
 
@@ -266,7 +420,7 @@ def process_helper(file_map, df_intervals, df_posix_records, fid=None):
                 else:
                     write_random += 1
 
-        check_random_operation(read_consecutive, read_sequential, read_random, total_reads, write_consecutive, write_sequential, write_random, total_writes)
+        #check_random_operation(read_consecutive, read_sequential, read_random, total_reads, write_consecutive, write_sequential, write_random, total_writes)
 
         #########################################################################################################################################################################
 
@@ -302,7 +456,7 @@ def process_helper(file_map, df_intervals, df_posix_records, fid=None):
             column_names = ['id', 'INSIGHTS_POSIX_SMALL_READS', 'INSIGHTS_POSIX_SMALL_WRITES']
             detected_files = pd.DataFrame(detected_files, columns=column_names)
 
-        check_shared_small_operation(total_shared_reads, total_shared_reads_small, total_shared_writes, total_shared_writes_small, detected_files, file_map)
+        #check_shared_small_operation(total_shared_reads, total_shared_reads_small, total_shared_writes, total_shared_writes_small, detected_files, file_map)
 
         #########################################################################################################################################################################
 
@@ -310,7 +464,7 @@ def process_helper(file_map, df_intervals, df_posix_records, fid=None):
         df_detected = df_posix_records.groupby('rank')['duration'].sum().reset_index()
         count_long_metadata = len(df_detected[(df_detected['duration'] > thresholds['metadata_time_rank'][0])])
 
-        check_long_metadata(count_long_metadata, modules)
+        #check_long_metadata(count_long_metadata, modules)
   
         # We already have a single line for each shared-file access
         # To check for stragglers, we can check the difference between the 
@@ -326,7 +480,7 @@ def process_helper(file_map, df_intervals, df_posix_records, fid=None):
                 slowest_rank_bytes = df_detected.loc[df_detected['duration'].idxmax(), 'size']
                 fastest_rank_bytes = df_detected.loc[df_detected['duration'].idxmin(), 'size']
             
-                check_shared_data_imblance_split(slowest_rank_bytes, fastest_rank_bytes, total_transfer_size)
+                #check_shared_data_imblance_split(slowest_rank_bytes, fastest_rank_bytes, total_transfer_size)
         else:
             stragglers_count = 0
             
@@ -349,7 +503,7 @@ def process_helper(file_map, df_intervals, df_posix_records, fid=None):
             column_names = ['id', 'data_imbalance']
             detected_files = pd.DataFrame(detected_files, columns=column_names)
 
-            check_shared_data_imblance(stragglers_count, detected_files, file_map)
+            #check_shared_data_imblance(stragglers_count, detected_files, file_map)
     
         # POSIX_F_FASTEST_RANK_TIME
         # POSIX_F_SLOWEST_RANK_TIME
@@ -363,7 +517,7 @@ def process_helper(file_map, df_intervals, df_posix_records, fid=None):
                 slowest_rank_time = df_detected['duration'].max()
                 fastest_rank_time = df_detected['duration'].min()
 
-                check_shared_time_imbalance_split(slowest_rank_time, fastest_rank_time, total_transfer_time)
+                #check_shared_time_imbalance_split(slowest_rank_time, fastest_rank_time, total_transfer_time)
         else:
             stragglers_count = 0
             
@@ -387,17 +541,21 @@ def process_helper(file_map, df_intervals, df_posix_records, fid=None):
             column_names = ['id', 'time_imbalance']
             detected_files = pd.DataFrame(detected_files, columns=column_names)
 
-            check_shared_time_imbalance(stragglers_count, detected_files, file_map)
+            #check_shared_time_imbalance(stragglers_count, detected_files, file_map)
 
         # Get the individual files responsible for imbalance
         if args.split_files:
             if df_posix['rank'].nunique() == 1:
                 df_detected = df_posix[~(df_posix['function'].str.contains('read'))]
                 
+                #df_writes = df_posix[~(df_posix['function'].str.contains('read'))]
+                #print("DEBUG: df_writes:")
+                #print(df_writes)
+
                 max_bytes_written = df_detected['size'].max()
                 min_bytes_written = df_detected['size'].min()
 
-                check_individual_write_imbalance_split(max_bytes_written, min_bytes_written)
+                #check_individual_write_imbalance_split(max_bytes_written, min_bytes_written)
 
             if df_posix['rank'].nunique() == 1:
                 df_detected = df_posix[(df_posix['function'].str.contains('read'))]
@@ -405,7 +563,7 @@ def process_helper(file_map, df_intervals, df_posix_records, fid=None):
                 max_bytes_read = df_detected['size'].max()
                 min_bytes_read = df_detected['size'].min()
                 
-                check_individual_read_imbalance_split(max_bytes_read, min_bytes_read)
+                #check_individual_read_imbalance_split(max_bytes_read, min_bytes_read)
         else:
             imbalance_count = 0
 
@@ -427,7 +585,7 @@ def process_helper(file_map, df_intervals, df_posix_records, fid=None):
             column_names = ['id', 'write_imbalance']
             detected_files = pd.DataFrame(detected_files, columns=column_names)
 
-            check_individual_write_imbalance(imbalance_count, detected_files, file_map)
+            #check_individual_write_imbalance(imbalance_count, detected_files, file_map)
 
             imbalance_count = 0
 
@@ -448,7 +606,7 @@ def process_helper(file_map, df_intervals, df_posix_records, fid=None):
             column_names = ['id', 'read_imbalance']
             detected_files = pd.DataFrame(detected_files, columns=column_names)
 
-            check_individual_read_imbalance(imbalance_count, detected_files, file_map)
+            #check_individual_read_imbalance(imbalance_count, detected_files, file_map)
 
     #########################################################################################################################################################################
 
@@ -483,7 +641,7 @@ def process_helper(file_map, df_intervals, df_posix_records, fid=None):
             column_names = ['id', 'absolute_indep_reads', 'percent_indep_reads']
             detected_files = pd.DataFrame(detected_files, columns=column_names)
 
-        check_mpi_collective_read_operation(mpiio_coll_reads, mpiio_indep_reads, total_mpiio_read_operations, detected_files, file_map)
+        #check_mpi_collective_read_operation(mpiio_coll_reads, mpiio_indep_reads, total_mpiio_read_operations, detected_files, file_map)
 
         if args.split_files:
             detected_files = pd.DataFrame()
@@ -503,7 +661,7 @@ def process_helper(file_map, df_intervals, df_posix_records, fid=None):
             column_names = ['id', 'absolute_indep_writes', 'percent_indep_writes']
             detected_files = pd.DataFrame(detected_files, columns=column_names)
 
-        check_mpi_collective_write_operation(mpiio_coll_writes, mpiio_indep_writes, total_mpiio_write_operations, detected_files, file_map)
+        #check_mpi_collective_write_operation(mpiio_coll_writes, mpiio_indep_writes, total_mpiio_write_operations, detected_files, file_map)
 
         #########################################################################################################################################################################
 
@@ -521,7 +679,7 @@ def process_helper(file_map, df_intervals, df_posix_records, fid=None):
         mpiio_nb_reads = len(df_mpiio_reads[(df_mpiio_reads['function'].str.contains('iread|begin|end'))])
         mpiio_nb_writes = len(df_mpiio_writes[(df_mpiio_writes['function'].str.contains('iwrite|begin|end'))])
 
-        check_mpi_none_block_operation(mpiio_nb_reads, mpiio_nb_writes, has_hdf5_extension, modules)
+        #check_mpi_none_block_operation(mpiio_nb_reads, mpiio_nb_writes, has_hdf5_extension, modules)
 
     #########################################################################################################################################################################
 
@@ -532,7 +690,7 @@ def process_helper(file_map, df_intervals, df_posix_records, fid=None):
     #########################################################################################################################################################################
 
     insights_end_time = time.time()
-
+    """
     console.print()
 
     if args.split_files:
@@ -600,7 +758,9 @@ def process_helper(file_map, df_intervals, df_posix_records, fid=None):
         filename = '{}.{}.html'.format(args.log_path, fid)
     else:
         filename = '{}.html'.format(args.log_path)
-
+    
+    
+    
     export_html(console, filename)
 
     if args.split_files:
@@ -615,7 +775,7 @@ def process_helper(file_map, df_intervals, df_posix_records, fid=None):
     else:
         filename = '{}-summary.csv'.format(args.log_path)
     export_csv(filename)
-
+    """
     final_counters = {
         #"total_write_size_stdio": total_write_size_stdio,
         #"total_read_size_stdio": total_read_size_stdio,
@@ -648,8 +808,16 @@ def process_helper(file_map, df_intervals, df_posix_records, fid=None):
         "total_shared_reads_small": total_shared_reads_small,
         "total_shared_writes": total_shared_writes,
         "total_shared_writes_small": total_shared_writes_small,
+        "slowest_rank_bytes": slowest_rank_bytes, 
+        "fastest_rank_bytes": fastest_rank_bytes,
         "total_transfer_size": total_transfer_size,
+        "slowest_rank_time": slowest_rank_time, 
+        "fastest_rank_time" : fastest_rank_time,
         "total_transfer_time": total_transfer_time,
+        #"max_bytes_written": max_bytes_written, 
+        #"min_bytes_written": min_bytes_written,
+        "max_bytes_read": max_bytes_read, 
+        "min_bytes_read": min_bytes_read,
         "mpiio_coll_reads": mpiio_coll_reads,
         "mpiio_indep_reads": mpiio_indep_reads,
         "total_mpiio_read_operations": total_mpiio_read_operations,
@@ -659,6 +827,30 @@ def process_helper(file_map, df_intervals, df_posix_records, fid=None):
         "mpiio_nb_reads": mpiio_nb_reads,
         "mpiio_nb_writes": mpiio_nb_writes,
     }
+
+    final_counters["max_bytes_written"] = max_bytes_written
+    final_counters["min_bytes_written"] = min_bytes_written
+    final_counters["modules"] = list(modules)
+
+    final_counters["file_map"] = file_map
+    final_counters["detected_files"] = detected_files
+    final_counters["shared_files"] = shared_files
+    final_counters["count_long_metadata"] = count_long_metadata
+    final_counters["stragglers_count"] = stragglers_count
+    final_counters["imbalance_count"] = imbalance_count
+
+    final_counters["has_hdf5_extension"] = has_hdf5_extension
+    final_counters["hints"] = hints
+    #final_counters["cb_nodes"] = cb_nodes
+    #final_counters["NUMBER_OF_COMPUTE_NODES"] = NUMBER_OF_COMPUTE_NODES
+    #final_counters["job"] = job
+    #final_counters["job_start"] = job_start
+    #final_counters["job_end"] = job_end
+    final_counters["total_files"] = total_files
+    final_counters["total_files_stdio"] = total_files_stdio
+    final_counters["total_files_posix"] = total_files_posix
+    final_counters["total_files_mpiio"] = total_files_mpiio
+    final_counters["df_intervals"] = df_intervals
 
     return final_counters
 

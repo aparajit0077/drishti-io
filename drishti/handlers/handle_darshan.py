@@ -70,6 +70,52 @@ def check_log_version(console, file, log_version, library_version):
 
     return use_file
 
+def display_drishti_output(job, job_start, job_end, total_files, total_files_stdio,
+                           total_files_posix, total_files_mpiio, NUMBER_OF_COMPUTE_NODES, hints):
+    from rich.console import Console
+    console = Console(record=True)
+    
+    #console = init_console()
+    console.print(
+        Panel(
+            '\n'.join([
+                ' [b]JOB[/b]:            [white]{}[/white]'.format(job.get('job', {}).get('jobid', os.path.basename(args.log_path))),
+                ' [b]EXECUTABLE[/b]:     [white]{}[/white]'.format(job.get('exe', 'N/A').split()[0]),
+                ' [b]DARSHAN[/b]:        [white]{}[/white]'.format(os.path.basename(args.log_path)),
+                ' [b]EXECUTION TIME[/b]: [white]{} to {} ({:.2f} hours)[/white]'.format(
+                    job_start,
+                    job_end,
+                    (job_end - job_start).total_seconds() / 3600
+                ),
+                ' [b]FILES[/b]:          [white]{} files ({} use STDIO, {} use POSIX, {} use MPI-IO)[/white]'.format(
+                    total_files,
+                    total_files_stdio,
+                    total_files_posix - total_files_mpiio,
+                    total_files_mpiio
+                ),
+                ' [b]COMPUTE NODES[/b]:   [white]{}[/white]'.format(NUMBER_OF_COMPUTE_NODES),
+                ' [b]PROCESSES[/b]:       [white]{}[/white]'.format(job.get('job', {}).get('nprocs', 'N/A')),
+                ' [b]HINTS[/b]:          [white]{}[/white]'.format(' '.join(hints))
+            ]),
+            title='[b][slate_blue3]DRISHTI[/slate_blue3] v.0.5[/b]',
+            title_align='left',
+            subtitle='[red][b]{} critical issues[/b][/red], [orange1][b]{} warnings[/b][/orange1], and [white][b]{} recommendations[/b][/white]'.format(
+                insights_total[HIGH],
+                insights_total[WARN],
+                insights_total[RECOMMENDATIONS],
+            ),
+            subtitle_align='left',
+            padding=1
+        )
+    )
+    #console.print()
+    display_content(console)
+    #args.thold = True
+    display_thresholds(console)
+    elapsed = (job_end - job_start).total_seconds()
+    display_footer(console, job_start, elapsed)
+    return console
+
 
 def handler():
     try:
@@ -86,8 +132,8 @@ def handler():
 
         insights_start_time = time.time()
 
-        old_stdout = sys.stdout
-        sys.stdout = io.StringIO()
+        #old_stdout = sys.stdout
+        #sys.stdout = io.StringIO()
 
         log = darshanll.log_open(args.log_path)
 
@@ -313,8 +359,8 @@ def handler():
                 'mpiio': uses_mpiio
             }
 
-        check_stdio(total_size, total_size_stdio)
-        check_mpiio(modules)
+        #check_stdio(total_size, total_size_stdio)
+        #check_mpiio(modules)
 
         #########################################################################################################################################################################
 
@@ -331,14 +377,14 @@ def handler():
             total_operations = total_writes + total_reads 
 
             # To check whether the application is write-intersive or read-intensive we only look at the POSIX level and check if the difference between reads and writes is larger than 10% (for more or less), otherwise we assume a balance
-            check_operation_intensive(total_operations, total_reads, total_writes)
+            #check_operation_intensive(total_operations, total_reads, total_writes)
 
             total_read_size = df['counters']['POSIX_BYTES_READ'].sum()
             total_written_size = df['counters']['POSIX_BYTES_WRITTEN'].sum()
 
             total_size = total_written_size + total_read_size
 
-            check_size_intensive(total_size, total_read_size, total_written_size)
+            #check_size_intensive(total_size, total_read_size, total_written_size)
 
             #########################################################################################################################################################################
 
@@ -382,7 +428,7 @@ def handler():
             detected_files.columns = ['id', 'total_reads', 'total_writes']
             detected_files.loc[:, 'id'] = detected_files.loc[:, 'id'].astype(str)
 
-            check_small_operation(total_reads, total_reads_small, total_writes, total_writes_small, detected_files, modules, file_map, dxt_posix, dxt_posix_read_data, dxt_posix_write_data)
+            #check_small_operation(total_reads, total_reads_small, total_writes, total_writes_small, detected_files, modules, file_map, dxt_posix, dxt_posix_read_data, dxt_posix_write_data)
 
             #########################################################################################################################################################################
 
@@ -391,7 +437,7 @@ def handler():
             total_mem_not_aligned = df['counters']['POSIX_MEM_NOT_ALIGNED'].sum()
             total_file_not_aligned = df['counters']['POSIX_FILE_NOT_ALIGNED'].sum()
 
-            check_misaligned(total_operations, total_mem_not_aligned, total_file_not_aligned, modules, file_map, df_lustre, dxt_posix, dxt_posix_read_data)
+            #check_misaligned(total_operations, total_mem_not_aligned, total_file_not_aligned, modules, file_map, df_lustre, dxt_posix, dxt_posix_read_data)
 
             #########################################################################################################################################################################
 
@@ -400,7 +446,7 @@ def handler():
             max_read_offset = df['counters']['POSIX_MAX_BYTE_READ'].max()
             max_write_offset = df['counters']['POSIX_MAX_BYTE_WRITTEN'].max()
 
-            check_traffic(max_read_offset, total_read_size, max_write_offset, total_written_size, dxt_posix, dxt_posix_read_data, dxt_posix_write_data)
+            #check_traffic(max_read_offset, total_read_size, max_write_offset, total_written_size, dxt_posix, dxt_posix_read_data, dxt_posix_write_data)
 
             #########################################################################################################################################################################
 
@@ -425,7 +471,7 @@ def handler():
             write_random = total_writes - write_consecutive - write_sequential
             #print('WRITE Random: {} ({:.2f}%)'.format(write_random, write_random / total_writes * 100))
 
-            check_random_operation(read_consecutive, read_sequential, read_random, total_reads, write_consecutive, write_sequential, write_random, total_writes, dxt_posix, dxt_posix_read_data, dxt_posix_write_data)
+            #check_random_operation(read_consecutive, read_sequential, read_random, total_reads, write_consecutive, write_sequential, write_random, total_writes, dxt_posix, dxt_posix_read_data, dxt_posix_write_data)
 
             #########################################################################################################################################################################
 
@@ -471,13 +517,13 @@ def handler():
                     shared_files['POSIX_SIZE_WRITE_100K_1M']
                 )
 
-                check_shared_small_operation(total_shared_reads, total_shared_reads_small, total_shared_writes, total_shared_writes_small, shared_files, file_map)
+                #check_shared_small_operation(total_shared_reads, total_shared_reads_small, total_shared_writes, total_shared_writes_small, shared_files, file_map)
 
             #########################################################################################################################################################################
 
             count_long_metadata = len(df['fcounters'][(df['fcounters']['POSIX_F_META_TIME'] > thresholds['metadata_time_rank'][0])])
 
-            check_long_metadata(count_long_metadata, modules)
+            #check_long_metadata(count_long_metadata, modules)
 
             # We already have a single line for each shared-file access
             # To check for stragglers, we can check the difference between the 
@@ -505,7 +551,7 @@ def handler():
 
             column_names = ['id', 'data_imbalance']
             detected_files = pd.DataFrame(detected_files, columns=column_names)
-            check_shared_data_imblance(stragglers_count, detected_files, file_map, dxt_posix, dxt_posix_read_data, dxt_posix_write_data)
+            #check_shared_data_imblance(stragglers_count, detected_files, file_map, dxt_posix, dxt_posix_read_data, dxt_posix_write_data)
 
             # POSIX_F_FASTEST_RANK_TIME
             # POSIX_F_SLOWEST_RANK_TIME
@@ -533,7 +579,7 @@ def handler():
 
             column_names = ['id', 'time_imbalance']
             detected_files = pd.DataFrame(detected_files, columns=column_names)
-            check_shared_time_imbalance(stragglers_count, detected_files, file_map)
+            #check_shared_time_imbalance(stragglers_count, detected_files, file_map)
 
             aggregated = df['counters'].loc[(df['counters']['rank'] != -1)][
                 ['rank', 'id', 'POSIX_BYTES_WRITTEN', 'POSIX_BYTES_READ']
@@ -562,7 +608,7 @@ def handler():
 
             column_names = ['id', 'write_imbalance']
             detected_files = pd.DataFrame(detected_files, columns=column_names)
-            check_individual_write_imbalance(imbalance_count, detected_files, file_map, dxt_posix, dxt_posix_write_data)
+            #check_individual_write_imbalance(imbalance_count, detected_files, file_map, dxt_posix, dxt_posix_write_data)
 
             imbalance_count = 0
 
@@ -578,7 +624,7 @@ def handler():
 
             column_names = ['id', 'read_imbalance']
             detected_files = pd.DataFrame(detected_files, columns=column_names)
-            check_individual_read_imbalance(imbalance_count, detected_files, file_map, dxt_posix, dxt_posix_read_data)
+            #check_individual_read_imbalance(imbalance_count, detected_files, file_map, dxt_posix, dxt_posix_read_data)
 
         #########################################################################################################################################################################
 
@@ -613,7 +659,7 @@ def handler():
             column_names = ['id', 'absolute_indep_reads', 'percent_indep_reads']
             detected_files = pd.DataFrame(detected_files, columns=column_names)
 
-            check_mpi_collective_read_operation(mpiio_coll_reads, mpiio_indep_reads, total_mpiio_read_operations, detected_files, file_map, dxt_mpiio)
+            #check_mpi_collective_read_operation(mpiio_coll_reads, mpiio_indep_reads, total_mpiio_read_operations, detected_files, file_map, dxt_mpiio)
 
             df_mpiio_collective_writes = df_mpiio['counters']  #.loc[(df_mpiio['counters']['MPIIO_COLL_WRITES'] > 0)]
 
@@ -638,7 +684,7 @@ def handler():
             column_names = ['id', 'absolute_indep_writes', 'percent_indep_writes']
             detected_files = pd.DataFrame(detected_files, columns=column_names)
 
-            check_mpi_collective_write_operation(mpiio_coll_writes, mpiio_indep_writes, total_mpiio_write_operations, detected_files, file_map, dxt_mpiio)
+            #check_mpi_collective_write_operation(mpiio_coll_writes, mpiio_indep_writes, total_mpiio_write_operations, detected_files, file_map, dxt_mpiio)
             
             #########################################################################################################################################################################
 
@@ -655,7 +701,7 @@ def handler():
             mpiio_nb_reads = df_mpiio['counters']['MPIIO_NB_READS'].sum()
             mpiio_nb_writes = df_mpiio['counters']['MPIIO_NB_WRITES'].sum()
 
-            check_mpi_none_block_operation(mpiio_nb_reads, mpiio_nb_writes, has_hdf5_extension, modules)
+            #check_mpi_none_block_operation(mpiio_nb_reads, mpiio_nb_writes, has_hdf5_extension, modules)
             #mpiio_counters = {
             #   "mpiio_coll_reads": mpiio_coll_reads,
             #  "mpiio_indep_reads": mpiio_indep_reads,
@@ -723,7 +769,7 @@ def handler():
                             NUMBER_OF_COMPUTE_NODES = first['NNodes']
 
                             # Do we have one MPI-IO aggregator per node?
-                            check_mpi_aggregator(cb_nodes, NUMBER_OF_COMPUTE_NODES)
+                            #check_mpi_aggregator(cb_nodes, NUMBER_OF_COMPUTE_NODES)
                     except StopIteration:
                         pass
             except FileNotFoundError:
@@ -741,66 +787,72 @@ def handler():
             job_start = datetime.datetime.fromtimestamp(job['job']['start_time_sec'], datetime.timezone.utc)
             job_end = datetime.datetime.fromtimestamp(job['job']['end_time_sec'], datetime.timezone.utc)
 
-        console.print()
-
-        console.print(
-            Panel(
-                '\n'.join([
-                    ' [b]JOB[/b]:            [white]{}[/white]'.format(
-                        job['job']['jobid']
+        #console.print()
+        """
+        def display_drishti_output(job, job_start, job_end, total_files, total_files_stdio, total_files_posix, total_files_mpiio, NUMBER_OF_COMPUTE_NODES, hints):
+            console = init_console()
+            console.print(
+                Panel(
+                    '\n'.join([
+                        ' [b]JOB[/b]:            [white]{}[/white]'.format(
+                            job['job']['jobid']
+                        ),
+                        ' [b]EXECUTABLE[/b]:     [white]{}[/white]'.format(
+                            job['exe'].split()[0]
+                        ),
+                        ' [b]DARSHAN[/b]:        [white]{}[/white]'.format(
+                            os.path.basename(args.log_path)
+                        ),
+                        ' [b]EXECUTION TIME[/b]: [white]{} to {} ({:.2f} hours)[/white]'.format(
+                            job_start,
+                            job_end,
+                            (job_end - job_start).total_seconds() / 3600
+                        ),
+                        ' [b]FILES[/b]:          [white]{} files ({} use STDIO, {} use POSIX, {} use MPI-IO)[/white]'.format(
+                            total_files,
+                            total_files_stdio,
+                            total_files_posix - total_files_mpiio,  # Since MPI-IO files will always use POSIX, we can decrement to get a unique count
+                            total_files_mpiio
+                        ),
+                        ' [b]COMPUTE NODES[/b]   [white]{}[/white]'.format(
+                            NUMBER_OF_COMPUTE_NODES
+                        ),
+                        ' [b]PROCESSES[/b]       [white]{}[/white]'.format(
+                            job['job']['nprocs']
+                        ),
+                        ' [b]HINTS[/b]:          [white]{}[/white]'.format(
+                            ' '.join(hints)
+                        )
+                    ]),
+                    title='[b][slate_blue3]DRISHTI[/slate_blue3] v.0.5[/b]',
+                    title_align='left',
+                    subtitle='[red][b]{} critical issues[/b][/red], [orange1][b]{} warnings[/b][/orange1], and [white][b]{} recommendations[/b][/white]'.format(
+                        insights_total[HIGH],
+                        insights_total[WARN],
+                        insights_total[RECOMMENDATIONS],
                     ),
-                    ' [b]EXECUTABLE[/b]:     [white]{}[/white]'.format(
-                        job['exe'].split()[0]
-                    ),
-                    ' [b]DARSHAN[/b]:        [white]{}[/white]'.format(
-                        os.path.basename(args.log_path)
-                    ),
-                    ' [b]EXECUTION TIME[/b]: [white]{} to {} ({:.2f} hours)[/white]'.format(
-                        job_start,
-                        job_end,
-                        (job_end - job_start).total_seconds() / 3600
-                    ),
-                    ' [b]FILES[/b]:          [white]{} files ({} use STDIO, {} use POSIX, {} use MPI-IO)[/white]'.format(
-                        total_files,
-                        total_files_stdio,
-                        total_files_posix - total_files_mpiio,  # Since MPI-IO files will always use POSIX, we can decrement to get a unique count
-                        total_files_mpiio
-                    ),
-                    ' [b]COMPUTE NODES[/b]   [white]{}[/white]'.format(
-                        NUMBER_OF_COMPUTE_NODES
-                    ),
-                    ' [b]PROCESSES[/b]       [white]{}[/white]'.format(
-                        job['job']['nprocs']
-                    ),
-                    ' [b]HINTS[/b]:          [white]{}[/white]'.format(
-                        ' '.join(hints)
-                    )
-                ]),
-                title='[b][slate_blue3]DRISHTI[/slate_blue3] v.0.5[/b]',
-                title_align='left',
-                subtitle='[red][b]{} critical issues[/b][/red], [orange1][b]{} warnings[/b][/orange1], and [white][b]{} recommendations[/b][/white]'.format(
-                    insights_total[HIGH],
-                    insights_total[WARN],
-                    insights_total[RECOMMENDATIONS],
-                ),
-                subtitle_align='left',
-                padding=1
+                    subtitle_align='left',
+                    padding=1
+                )
             )
-        )
 
-        console.print()
+            console.print()
 
-        display_content(console)
-        display_thresholds(console)
-        display_footer(console, insights_start_time, insights_end_time)
+            display_content(console)
+            display_thresholds(console)
+            display_footer(console, insights_start_time, insights_end_time)
+            return console
         
-        output_dir = "/mnt/c/Users/apara/Downloads/darshan"
-        base_name = os.path.basename(args.log_path)  
-        file_no_ext = os.path.splitext(base_name)[0] 
-        html_filename = f"{file_no_ext}.html"
-        filename = os.path.join(output_dir, html_filename)
-        print(f"Exporting HTML to: {filename}") 
-        export_html(console, filename)
+        """
+        
+        #output_dir = "/mnt/c/Users/apara/Downloads/darshan"
+        #base_name = os.path.basename(args.log_path)  
+        #file_no_ext = os.path.splitext(base_name)[0] 
+        #html_filename = f"{file_no_ext}.html"
+        #filename = os.path.join(output_dir, html_filename)
+        #print(f"Exporting HTML to: {filename}") 
+        #export_html(console, filename)
+
 
         #filename = '{}.html'.format(args.log_path)
         #export_html(console, filename)
@@ -857,15 +909,37 @@ def handler():
             "mpiio_nb_reads": mpiio_nb_reads,
             "mpiio_nb_writes": mpiio_nb_writes,
         }
-
-        sys.stdout = old_stdout
+        final_counters["modules"] = list(modules)
+        final_counters["df_lustre"] = df_lustre if 'df_lustre' in locals() else None
+        final_counters["dxt_posix"] = dxt_posix if 'dxt_posix' in locals() else None
+        final_counters["dxt_posix_read_data"] = dxt_posix_read_data if 'dxt_posix_read_data' in locals() else None
+        final_counters["dxt_posix_write_data"] = dxt_posix_write_data if 'dxt_posix_write_data' in locals() else None
+        final_counters["file_map"] = file_map
+        final_counters["detected_files"] = detected_files
+        final_counters["shared_files"] = shared_files
+        final_counters["count_long_metadata"] = count_long_metadata
+        final_counters["stragglers_count"] = stragglers_count
+        final_counters["imbalance_count"] = imbalance_count
+        final_counters["dxt_mpiio"] = dxt_mpiio if 'dxt_mpiio' in locals() else None
+        final_counters["has_hdf5_extension"] = has_hdf5_extension
+        final_counters["hints"] = hints
+        final_counters["cb_nodes"] = cb_nodes
+        final_counters["NUMBER_OF_COMPUTE_NODES"] = NUMBER_OF_COMPUTE_NODES
+        final_counters["job"] = job
+        final_counters["job_start"] = job_start
+        final_counters["job_end"] = job_end
+        final_counters["total_files"] = total_files
+        final_counters["total_files_stdio"] = total_files_stdio
+        final_counters["total_files_posix"] = total_files_posix
+        final_counters["total_files_mpiio"] = total_files_mpiio
+        #sys.stdout = old_stdout
         return final_counters
 
     except Exception as e:
-        sys.stdout = sys.__stdout__  # Ensure stdout is restored even on error
+        #sys.stdout = sys.__stdout__  # Ensure stdout is restored even on error
         print("Darshan handler error:", e)
         return {}
-
+    
 
 """
 if __name__ == "__main__":
