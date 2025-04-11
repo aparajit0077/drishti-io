@@ -129,10 +129,10 @@ def main():
     slowest_rank_time      = analysis.get_counter("slowest_rank_time") or 0 
     fastest_rank_time      = analysis.get_counter("fastest_rank_time") or 0
     total_transfer_time    = analysis.get_counter("total_transfer_time") or 0
-    max_bytes_written      = analysis.get_counter("max_bytes_written") or 0
-    min_bytes_written      = analysis.get_counter("min_bytes_written") or 0
-    max_bytes_read         = analysis.get_counter("max_bytes_read") or 0
-    min_bytes_read         = analysis.get_counter("min_bytes_read") or 0
+    max_bytes_written      = analysis.get_counter("max_bytes_written") or None
+    min_bytes_written      = analysis.get_counter("min_bytes_written") or None
+    max_bytes_read         = analysis.get_counter("max_bytes_read") or None
+    min_bytes_read         = analysis.get_counter("min_bytes_read") or None
     mpiio_coll_reads       = analysis.get_counter("mpiio_coll_reads") or 0
     mpiio_indep_reads      = analysis.get_counter("mpiio_indep_reads") or 0
     total_mpiio_read_operations = analysis.get_counter("total_mpiio_read_operations") or 0
@@ -145,11 +145,24 @@ def main():
 
     file_map               = analysis.get_counter("file_map") or {}
     modules                = set(analysis.get_counter("modules") or [])
+    
     detected_files         = analysis.get_counter("detected_files")
+    detected_files_read    = analysis.get_counter("detected_files_read")
+    detected_files_write   = analysis.get_counter("detected_files_write")
+
+    write_df_map           = analysis.get_counter("write_df_map") or {}
+    write_counters         = analysis.get_counter("write_counters") or {}
+    read_df_map            = analysis.get_counter("read_df_map") or {}
+    read_counters         = analysis.get_counter("read_counters") or {}
+    
     shared_files           = analysis.get_counter("shared_files")
     count_long_metadata    = analysis.get_counter("count_long_metadata") or 0
     stragglers_count       = analysis.get_counter("stragglers_count") or 0
+    
     imbalance_count        = analysis.get_counter("imbalance_count") or 0
+    imbalance_count_read   = analysis.get_counter("imbalance_count_read") or 0
+    imbalance_count_write  = analysis.get_counter("imbalance_count_write") or 0
+
     dxt_mpiio              = analysis.get_counter("dxt_mpiio")
     dxt_posix              = analysis.get_counter("dxt_posix")
     dxt_posix_read_data    = analysis.get_counter("dxt_posix_read_data")
@@ -161,87 +174,100 @@ def main():
     if df_intervals is None or df_intervals.empty:
         df_intervals = pd.DataFrame(columns=["start", "end", "size", "file_id", "api", "rank"])
 
-    print("[DEBUG] Running check_stdio...")
+    df_posix = analysis.get_counter("df_posix")
+
+
     check_stdio(total_size, total_size_stdio)
     
-    print("[DEBUG] Running check_mpiio...")
     check_mpiio(modules)
     
-    print("[DEBUG] Running check_operation_intensive...")
     check_operation_intensive(total_operations, total_reads, total_writes)
     
-    print("[DEBUG] Running check_size_intensive...")
     check_size_intensive(total_size, total_read_size, total_written_size)
     
-    print("[DEBUG] Running check_small_operation...")
     check_small_operation(total_reads, total_reads_small, total_writes, total_writes_small,
                           detected_files, modules, file_map, dxt_posix, dxt_posix_read_data, dxt_posix_write_data)
     
-    print("[DEBUG] Running check_misaligned...")
     check_misaligned(total_operations, total_mem_not_aligned, total_file_not_aligned,
                      modules, file_map, analysis.get_counter("df_lustre"), dxt_posix, dxt_posix_read_data)
     
-    print("[DEBUG] Running check_traffic...")
     check_traffic(max_read_offset, total_read_size, max_write_offset, total_written_size,
                   dxt_posix, dxt_posix_read_data, dxt_posix_write_data)
     
-    print("[DEBUG] Running check_random_operation...")
     check_random_operation(read_consecutive, read_sequential, read_random, total_reads,
                            write_consecutive, write_sequential, write_random, total_writes,
                            dxt_posix, dxt_posix_read_data, dxt_posix_write_data)
     
-    print("[DEBUG] Running check_shared_small_operation...")
     check_shared_small_operation(total_shared_reads, total_shared_reads_small,
                                  total_shared_writes, total_shared_writes_small,
                                  shared_files, file_map)
     
-    print("[DEBUG] Running check_long_metadata...")
     check_long_metadata(count_long_metadata, modules)
 
-    print("[DEBUG] Running check_shared_data_imblance_split...")
     check_shared_data_imblance_split(slowest_rank_bytes, fastest_rank_bytes, total_transfer_size)
     
-    print("[DEBUG] Running check_shared_data_imblance...")
     check_shared_data_imblance(stragglers_count, detected_files, file_map,
                                dxt_posix, dxt_posix_read_data, dxt_posix_write_data)
     
-    print("[DEBUG] Running check_shared_time_imbalance_split...")
     check_shared_time_imbalance_split(slowest_rank_time, fastest_rank_time, total_transfer_time)
     
-    print("[DEBUG] Running check_shared_time_imbalance...")
     check_shared_time_imbalance(stragglers_count, detected_files, file_map)
 
     check_individual_write_imbalance_split(max_bytes_written, min_bytes_written)
 
     check_individual_read_imbalance_split(max_bytes_read, min_bytes_read)
     
-    print("[DEBUG] Running check_individual_write_imbalance...")
-    check_individual_write_imbalance(imbalance_count, detected_files, file_map, dxt_posix, dxt_posix_write_data)
+    new_detected_write_list = []
+    for file_id, df in write_df_map.items():
+        max_bytes_written = df['size'].max()
+        min_bytes_written = df['size'].min()    
+        if max_bytes_written and abs(max_bytes_written - min_bytes_written) / max_bytes_written > thresholds['imbalance_size'][0]:
+            imbalance_count_write += 1
+            imbalance_percentage = abs(max_bytes_written - min_bytes_written) / max_bytes_written * 100
+            new_detected_write_list.append([file_id, imbalance_percentage])
+    column_names = ['id', 'write_imbalance']
+    new_detected_df = pd.DataFrame(new_detected_write_list, columns=column_names)
+    # If detected_files already exists and is not empty, concatenate the new data with it.
+    if detected_files is not None and not detected_files.empty:
+        # Concatenate along the rows and reset the index.
+        detected_files = pd.concat([detected_files, new_detected_df], ignore_index=True)
+    else:
+        detected_files = new_detected_df
+    check_individual_write_imbalance(imbalance_count_write, detected_files, file_map, dxt_posix, dxt_posix_write_data)
+      
     
-    print("[DEBUG] Running check_individual_read_imbalance...")
-    check_individual_read_imbalance(imbalance_count, detected_files, file_map, dxt_posix, dxt_posix_read_data)
+    new_detected_read_list = []
+    for file_id, df in read_df_map.items():  
+        max_bytes_read = df['size'].max()
+        min_bytes_read = df['size'].min()
+        if max_bytes_read and abs(max_bytes_read - min_bytes_read) / max_bytes_read > thresholds['imbalance_size'][0]:
+            imbalance_count_read += 1
+            imbalance_percentage_read = abs(max_bytes_read - min_bytes_read) / max_bytes_read * 100
+            new_detected_read_list.append([file_id, imbalance_percentage_read])
+    column_names = ['id', 'read_imbalance']
+    new_detected_read_df = pd.DataFrame(new_detected_read_list, columns=column_names)
+    if detected_files is not None and not detected_files.empty:
+        detected_files = pd.concat([detected_files, new_detected_read_df], ignore_index=True)
+    else:
+        detected_files = new_detected_read_df
+    check_individual_read_imbalance(imbalance_count_read, detected_files, file_map, dxt_posix, dxt_posix_read_data)
     
-    print("[DEBUG] Running check_mpi_collective_read_operation...")
+    
     check_mpi_collective_read_operation(mpiio_coll_reads, mpiio_indep_reads, total_mpiio_read_operations,
                                          detected_files, file_map, dxt_mpiio)
     
-    print("[DEBUG] Running check_mpi_collective_write_operation...")
     check_mpi_collective_write_operation(mpiio_coll_writes, mpiio_indep_writes, total_mpiio_write_operations,
                                           detected_files, file_map, dxt_mpiio)
     
-    print("[DEBUG] Running check_mpi_none_block_operation...")
     check_mpi_none_block_operation(mpiio_nb_reads, mpiio_nb_writes, has_hdf5_extension, modules)
     
     if 'MPI-IO' in modules:
-        print("[DEBUG] Running check_mpi_aggregator...")
         try:
             cb_nodes = int(cb_nodes)
         except (ValueError, TypeError):
             cb_nodes = 0
         check_mpi_aggregator(cb_nodes, NUMBER_OF_COMPUTE_NODES)
 
-    print("[DEBUG] insights_operation:", insights_operation)
-    print("[DEBUG] insights_metadata:", insights_metadata)
 
     # Display final Drishti panel.
     job          = analysis.get_counter("job") or {}
@@ -317,7 +343,8 @@ def main():
 
     print("max_bytes_written:", analysis.get_counter("max_bytes_written"))
     print("min_bytes_written:", analysis.get_counter("min_bytes_written"))
-    print("imbalance_count:", analysis.get_counter("imbalance_count"))
+    print("imbalance count write:", analysis.get_counter("imbalance_count_write"))
+    print("imbalance count read:", analysis.get_counter("imbalance_count_read"))
     print("detected_files:", analysis.get_counter("detected_files"))
 
     print(df_intervals.head())
