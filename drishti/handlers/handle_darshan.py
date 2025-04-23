@@ -118,6 +118,13 @@ def display_drishti_output(job, job_start, job_end, total_files, total_files_std
 
 
 def handler():
+    #shared_files_times = pd.DataFrame
+    total_shared_reads = None
+    total_shared_writes = None
+    total_shared_reads_small = None
+    total_shared_writes_small = None
+    total_transfer_size = None
+    total_transfer_time = None
     try:
 
         if not hasattr(sys.modules[__name__], 'args'):
@@ -183,7 +190,7 @@ def handler():
 
         if 'POSIX' in report.records:
             df_posix = report.records['POSIX'].to_df()
-
+            
             if df_posix:
                 total_write_size_posix = df_posix['counters']['POSIX_BYTES_WRITTEN'].sum()
                 total_read_size_posix = df_posix['counters']['POSIX_BYTES_READ'].sum()
@@ -521,8 +528,9 @@ def handler():
 
             #########################################################################################################################################################################
 
-            count_long_metadata = len(df['fcounters'][(df['fcounters']['POSIX_F_META_TIME'] > thresholds['metadata_time_rank'][0])])
+            #count_long_metadata = len(df['fcounters'][(df['fcounters']['POSIX_F_META_TIME'] > thresholds['metadata_time_rank'][0])])
 
+            metadata_times = df['fcounters']['POSIX_F_META_TIME'].tolist()
             #check_long_metadata(count_long_metadata, modules)
 
             # We already have a single line for each shared-file access
@@ -538,7 +546,23 @@ def handler():
 
             # Get the files responsible
             detected_files = []
-
+            shared_data_map = {}
+            for _, row in shared_files.iterrows():
+                fid = row['id']
+                # total bytes transferred by POSIX
+                total_transfer_size = (row['POSIX_BYTES_WRITTEN']+ row['POSIX_BYTES_READ'])
+                # 2‑row DataFrame of [fastest, slowest] rank‐bytes
+                df_detected = pd.DataFrame({
+                    'size': [
+                        row['POSIX_FASTEST_RANK_BYTES'],
+                        row['POSIX_SLOWEST_RANK_BYTES']
+                    ]
+                })
+                shared_data_map[fid] = {
+                    'df_detected': df_detected,
+                    'total_transfer_size': total_transfer_size
+                }
+            """
             for index, row in shared_files.iterrows():
                 total_transfer_size = row['POSIX_BYTES_WRITTEN'] + row['POSIX_BYTES_READ']
 
@@ -551,14 +575,15 @@ def handler():
 
             column_names = ['id', 'data_imbalance']
             detected_files = pd.DataFrame(detected_files, columns=column_names)
+            """
             #check_shared_data_imblance(stragglers_count, detected_files, file_map, dxt_posix, dxt_posix_read_data, dxt_posix_write_data)
 
             # POSIX_F_FASTEST_RANK_TIME
             # POSIX_F_SLOWEST_RANK_TIME
             # POSIX_F_VARIANCE_RANK_TIME
 
-            shared_files_times = df['fcounters'].loc[(df['fcounters']['rank'] == -1)]
-
+            #shared_files_times = df['fcounters'].loc[(df['fcounters']['rank'] == -1)]
+            shared_files_times = df['fcounters'][df['fcounters']['rank'] == -1].copy()
             # Get the files responsible
             detected_files = []
 
@@ -566,7 +591,27 @@ def handler():
             stragglers_imbalance = {}
 
             shared_files_times = shared_files_times.assign(id=lambda d: d['id'].astype(str))
-
+            shared_time_map = {}
+            for _, row in shared_files_times.iterrows():
+                fid = row['id']
+                # compute the total transfer time from the row fields
+                total_transfer_time = (
+                    row['POSIX_F_WRITE_TIME']
+                + row['POSIX_F_READ_TIME']
+                + row['POSIX_F_META_TIME']
+                )
+                # create a 2‑row DataFrame of [fastest, slowest] durations
+                df_detected = pd.DataFrame({
+                    'duration': [
+                        row['POSIX_F_FASTEST_RANK_TIME'],
+                        row['POSIX_F_SLOWEST_RANK_TIME']
+                    ]
+                })
+                shared_time_map[fid] = {
+                    'df_detected': df_detected,
+                    'total_transfer_time': total_transfer_time
+                }
+            """
             for index, row in shared_files_times.iterrows():
                 total_transfer_time = row['POSIX_F_WRITE_TIME'] + row['POSIX_F_READ_TIME'] + row['POSIX_F_META_TIME']
 
@@ -579,6 +624,7 @@ def handler():
 
             column_names = ['id', 'time_imbalance']
             detected_files = pd.DataFrame(detected_files, columns=column_names)
+            """
             #check_shared_time_imbalance(stragglers_count, detected_files, file_map)
 
             aggregated = df['counters'].loc[(df['counters']['rank'] != -1)][
@@ -594,10 +640,25 @@ def handler():
             aggregated = aggregated.assign(id=lambda d: d['id_'].astype(str))
 
             # Get the files responsible
-            imbalance_count = 0
+            #imbalance_count = 0
 
             detected_files = []
+            write_df_map = {}
+            for _, row in aggregated.iterrows():
+                fid = row['id']
+                #total_transfer_size = row['POSIX_BYTES_WRITTEN_sum']
+                df_detected = pd.DataFrame({
+                    'size': [
+                        row['POSIX_BYTES_WRITTEN_min'],
+                        row['POSIX_BYTES_WRITTEN_max']
+                    ]
+                })
+                write_df_map[fid] = {
+                    'df_detected': df_detected,
+                    #'total_transfer_size': total_transfer_size
+                }
 
+            """
             for index, row in aggregated.iterrows():
                 if row['POSIX_BYTES_WRITTEN_max'] and abs(row['POSIX_BYTES_WRITTEN_max'] - row['POSIX_BYTES_WRITTEN_min']) / row['POSIX_BYTES_WRITTEN_max'] > thresholds['imbalance_size'][0]:
                     imbalance_count += 1
@@ -608,12 +669,28 @@ def handler():
 
             column_names = ['id', 'write_imbalance']
             detected_files = pd.DataFrame(detected_files, columns=column_names)
+            """
             #check_individual_write_imbalance(imbalance_count, detected_files, file_map, dxt_posix, dxt_posix_write_data)
 
-            imbalance_count = 0
+            #imbalance_count = 0
 
             detected_files = []
-
+            read_df_map = {}
+            
+            for _, row in aggregated.iterrows():
+                fid = row['id']
+                #total_transfer_size = row['POSIX_BYTES_READ_sum']
+                df_detected = pd.DataFrame({
+                    'size': [
+                        row['POSIX_BYTES_READ_min'],
+                        row['POSIX_BYTES_READ_max']
+                    ]
+                })
+                read_df_map[fid] = {
+                    'df_detected': df_detected,
+                    #'total_transfer_size': total_transfer_size
+                }
+            """
             for index, row in aggregated.iterrows():
                 if row['POSIX_BYTES_READ_max'] and abs(row['POSIX_BYTES_READ_max'] - row['POSIX_BYTES_READ_min']) / row['POSIX_BYTES_READ_max'] > thresholds['imbalance_size'][0]:
                     imbalance_count += 1
@@ -624,6 +701,8 @@ def handler():
 
             column_names = ['id', 'read_imbalance']
             detected_files = pd.DataFrame(detected_files, columns=column_names)
+            
+            """
             #check_individual_read_imbalance(imbalance_count, detected_files, file_map, dxt_posix, dxt_posix_read_data)
 
         #########################################################################################################################################################################
@@ -644,6 +723,18 @@ def handler():
             mpiio_coll_reads = df_mpiio['counters']['MPIIO_COLL_READS'].sum()
             mpiio_indep_reads = df_mpiio['counters']['MPIIO_INDEP_READS'].sum()
 
+            collective_read_map = {}
+            for _, row in df_mpiio_collective_reads.iterrows():
+                fid   = row['id']
+                indep_reads = int(row['MPIIO_INDEP_READS'])
+                coll_reads  = int(row['MPIIO_COLL_READS'])
+                total_mpi_reads = indep_reads + coll_reads
+                
+                collective_read_map[fid] = {
+                    'indep_reads': indep_reads,
+                    'total_mpi_reads' : total_mpi_reads
+                }
+            """
             detected_files = []
             if mpiio_coll_reads == 0 and total_mpiio_read_operations and total_mpiio_read_operations > thresholds['collective_operations_absolute'][0]:
                 files = pd.DataFrame(df_mpiio_collective_reads.groupby('id').sum()).reset_index()
@@ -659,6 +750,7 @@ def handler():
             column_names = ['id', 'absolute_indep_reads', 'percent_indep_reads']
             detected_files = pd.DataFrame(detected_files, columns=column_names)
 
+            """
             #check_mpi_collective_read_operation(mpiio_coll_reads, mpiio_indep_reads, total_mpiio_read_operations, detected_files, file_map, dxt_mpiio)
 
             df_mpiio_collective_writes = df_mpiio['counters']  #.loc[(df_mpiio['counters']['MPIIO_COLL_WRITES'] > 0)]
@@ -668,6 +760,18 @@ def handler():
             mpiio_coll_writes = df_mpiio['counters']['MPIIO_COLL_WRITES'].sum()
             mpiio_indep_writes = df_mpiio['counters']['MPIIO_INDEP_WRITES'].sum()
 
+            collective_write_map = {}
+            for _, row in df_mpiio_collective_writes.iterrows():
+                fid           = row['id']
+                indep_writes  = int(row['MPIIO_INDEP_WRITES'])
+                coll_writes   = int(row['MPIIO_COLL_WRITES'])
+                total_mpi_writes  = indep_writes + coll_writes
+
+                collective_write_map[fid] = {
+                    'indep_writes': indep_writes,
+                    'total_mpi_writes': total_mpi_writes
+                }
+            """
             detected_files = []
             if mpiio_coll_writes == 0 and total_mpiio_write_operations and total_mpiio_write_operations > thresholds['collective_operations_absolute'][0]:
                 files = pd.DataFrame(df_mpiio_collective_writes.groupby('id').sum()).reset_index()
@@ -683,7 +787,7 @@ def handler():
 
             column_names = ['id', 'absolute_indep_writes', 'percent_indep_writes']
             detected_files = pd.DataFrame(detected_files, columns=column_names)
-
+            """            
             #check_mpi_collective_write_operation(mpiio_coll_writes, mpiio_indep_writes, total_mpiio_write_operations, detected_files, file_map, dxt_mpiio)
             
             #########################################################################################################################################################################
@@ -702,26 +806,6 @@ def handler():
             mpiio_nb_writes = df_mpiio['counters']['MPIIO_NB_WRITES'].sum()
 
             #check_mpi_none_block_operation(mpiio_nb_reads, mpiio_nb_writes, has_hdf5_extension, modules)
-            #mpiio_counters = {
-            #   "mpiio_coll_reads": mpiio_coll_reads,
-            #  "mpiio_indep_reads": mpiio_indep_reads,
-            # "total_mpiio_read_operations": total_mpiio_read_operations,
-            # "mpiio_coll_writes": mpiio_coll_writes,
-            # "mpiio_indep_writes": mpiio_indep_writes,
-            # "total_mpiio_write_operations": total_mpiio_write_operations,
-            # "mpiio_nb_reads": mpiio_nb_reads,
-            # "mpiio_nb_writes": mpiio_nb_writes,
-            #}
-        #else:
-        #   mpiio_counters = {
-        #     "mpiio_indep_reads": 0,
-        #     "total_mpiio_read_operations": 0,
-        #     "mpiio_coll_writes": 0,
-            #    "mpiio_indep_writes": 0,
-            #   "total_mpiio_write_operations": 0,
-            #  "mpiio_nb_reads": 0,
-            # "mpiio_nb_writes": 0,
-            #}
         #########################################################################################################################################################################
 
         # Nodes and MPI-IO aggregators
@@ -917,9 +1001,16 @@ def handler():
         final_counters["file_map"] = file_map
         final_counters["detected_files"] = detected_files
         final_counters["shared_files"] = shared_files
-        final_counters["count_long_metadata"] = count_long_metadata
+        final_counters["count_long_metadata"] = 0
+        final_counters["metadata_times"]    = metadata_times
+        final_counters["shared_data_map"] = shared_data_map
+        final_counters["shared_time_map"] = shared_time_map
         final_counters["stragglers_count"] = stragglers_count
-        final_counters["imbalance_count"] = imbalance_count
+        #final_counters["imbalance_count"] = imbalance_count
+        final_counters["write_df_map"] = write_df_map
+        final_counters["read_df_map"] = read_df_map
+        final_counters["collective_read_map"] = collective_read_map
+        final_counters["collective_write_map"] = collective_write_map
         final_counters["dxt_mpiio"] = dxt_mpiio if 'dxt_mpiio' in locals() else None
         final_counters["has_hdf5_extension"] = has_hdf5_extension
         final_counters["hints"] = hints

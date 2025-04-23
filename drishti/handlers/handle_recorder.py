@@ -248,6 +248,11 @@ def process_helper(file_map, df_intervals, df_posix_records, fid=None):
     min_bytes_written = None
     max_bytes_read    = None
     min_bytes_read    = None
+
+    slowest_rank_bytes = None
+    fastest_rank_bytes = None
+    slowest_rank_time  = None
+    fastest_rank_time  = None
     
     if not len(df_intervals): return
     
@@ -401,9 +406,13 @@ def process_helper(file_map, df_intervals, df_posix_records, fid=None):
 
         # Get the number of small I/O operations (less than 1 MB)
 
+        #read_sizes  = df_posix[df_posix['function'].str.contains('read')]['size'].tolist()
+        #write_sizes = df_posix[~df_posix['function'].str.contains('read')]['size'].tolist()
+        
+        """
         total_reads_small = len(df_posix[(df_posix['function'].str.contains('read')) & (df_posix['size'] < thresholds['small_bytes'][0])])
         total_writes_small = len(df_posix[~(df_posix['function'].str.contains('read')) & (df_posix['size'] < thresholds['small_bytes'][0])])
-
+        """
         df_writes = df_posix[~(df_posix['function'].str.contains('read'))]
         max_bytes_written = df_writes["size"].max()
         min_bytes_written = df_writes["size"].min()
@@ -413,6 +422,14 @@ def process_helper(file_map, df_intervals, df_posix_records, fid=None):
         if args.split_files:
             detected_files = pd.DataFrame()
         else:
+            small_map = {}
+            for fid in file_map:
+                df_f = df_posix[df_posix['file_id'] == fid]
+                small_map[fid] = {
+                    "read_sizes":  df_f[df_f['function'].str.contains("read") ]["size"].tolist(),
+                    "write_sizes": df_f[~df_f['function'].str.contains("read")]["size"].tolist()
+                }
+            """
             detected_files = []
             for id in file_map.keys():
                 read_cnt = len(df_posix[(df_posix['file_id'] == id) & (df_posix['function'].str.contains('read')) & (df_posix['size'] < thresholds['small_bytes'][0])])
@@ -421,7 +438,8 @@ def process_helper(file_map, df_intervals, df_posix_records, fid=None):
 
             column_names = ['id', 'total_reads', 'total_writes']
             detected_files = pd.DataFrame(detected_files, columns=column_names)
-
+            """
+            
         #check_small_operation(total_reads, total_reads_small, total_writes, total_writes_small, detected_files, modules, file_map)
 
         #########################################################################################################################################################################
@@ -543,11 +561,15 @@ def process_helper(file_map, df_intervals, df_posix_records, fid=None):
             stragglers_count = 0
             
             detected_files = []
+            shared_data_map ={}
             for id in shared_files:
                 df_posix_in_one_file = df_posix[(df_posix['file_id'] == id)]
                 total_transfer_size = df_posix_in_one_file['size'].sum()
 
                 df_detected = df_posix_in_one_file.groupby('rank').agg({'size': 'sum', 'duration': 'sum'}).reset_index()
+                shared_data_map[id] = {'df_detected': df_detected, 'total_transfer_size': total_transfer_size}
+                
+                """                
                 slowest_rank_bytes = df_detected.loc[df_detected['duration'].idxmax(), 'size']
                 fastest_rank_bytes = df_detected.loc[df_detected['duration'].idxmin(), 'size']
 
@@ -560,7 +582,7 @@ def process_helper(file_map, df_intervals, df_posix_records, fid=None):
             
             column_names = ['id', 'data_imbalance']
             detected_files = pd.DataFrame(detected_files, columns=column_names)
-
+            """
             #check_shared_data_imblance(stragglers_count, detected_files, file_map)
     
         # POSIX_F_FASTEST_RANK_TIME
@@ -580,12 +602,15 @@ def process_helper(file_map, df_intervals, df_posix_records, fid=None):
             stragglers_count = 0
             
             detected_files = []
+            shared_time_map = {}
             for id in shared_files:
                 df_posix_in_one_file = df_posix[(df_posix['file_id'] == id)]
                 total_transfer_time = df_posix_in_one_file['duration'].sum()
 
                 df_detected = df_posix_in_one_file.groupby('rank')['duration'].sum().reset_index()
-
+                shared_time_map[id] = {'df_detected': df_detected, 'total_transfer_time': total_transfer_time}
+                
+                """
                 slowest_rank_time = df_detected['duration'].max()
                 fastest_rank_time = df_detected['duration'].min()
 
@@ -598,147 +623,38 @@ def process_helper(file_map, df_intervals, df_posix_records, fid=None):
 
             column_names = ['id', 'time_imbalance']
             detected_files = pd.DataFrame(detected_files, columns=column_names)
-
-            #check_shared_time_imbalance(stragglers_count, detected_files, file_map)
-        
-        # Explicit initialization for both writes and reads
-        #max_bytes_written = min_bytes_written = None
-        #max_bytes_read = min_bytes_read = None
-        
-        """  
-        if args.split_files:
-            if df_posix['rank'].nunique() == 1:
-                # WRITE imbalance for split files
-                max_bytes_written = 0
-                min_bytes_written = 0
-                df_writes = df_posix[~(df_posix['function'].str.contains('read'))]
-                print("DEBUG: Number of write rows =", len(df_writes))
-                if not df_writes.empty:
-                    max_bytes_written = df_writes['size'].max()
-                    min_bytes_written = df_writes['size'].min()
-                print("DEBUG: max_bytes_written =", max_bytes_written)
-                print("DEBUG: min_bytes_written =", min_bytes_written)
-                if max_bytes_written > 0:
-                    ratio = abs(max_bytes_written - min_bytes_written) / max_bytes_written
-                    print("DEBUG: Write imbalance ratio =", ratio)
-                    if ratio > thresholds['imbalance_size'][0]:
-                        detected_files = pd.DataFrame([[0, ratio * 100]],
-                                                    columns=['id', 'write_imbalance'])
-                        print("[WRITE IMBALANCE SPLIT DEBUG]:", detected_files)
-                        #check_individual_write_imbalance_split(max_bytes_written, min_bytes_written)
-                    else:
-                        print("[WRITE IMBALANCE SPLIT DEBUG]: No significant imbalance detected.")
-                else:
-                    print("[WRITE IMBALANCE SPLIT DEBUG]: No writes detected.")
-
-                # READ imbalance for split files
-                max_bytes_read = 0
-                min_bytes_read = 0
-                df_reads = df_posix[df_posix['function'].str.contains('read')]
-                print("DEBUG: Number of read rows =", len(df_reads))
-                if not df_reads.empty:
-                    max_bytes_read = df_reads['size'].max()
-                    min_bytes_read = df_reads['size'].min()
-                print("DEBUG: max_bytes_read =", max_bytes_read)
-                print("DEBUG: min_bytes_read =", min_bytes_read)
-                if max_bytes_read > 0:
-                    ratio = abs(max_bytes_read - min_bytes_read) / max_bytes_read
-                    print("DEBUG: Read imbalance ratio =", ratio)
-                    if ratio > thresholds['imbalance_size'][0]:
-                        detected_files = pd.DataFrame([[0, ratio * 100]],
-                                                    columns=['id', 'read_imbalance'])
-                        print("[READ IMBALANCE SPLIT DEBUG]:", detected_files)
-                        #check_individual_read_imbalance_split(max_bytes_read, min_bytes_read)
-                    else:
-                        print("[READ IMBALANCE SPLIT DEBUG]: No significant imbalance detected.")
-                else:
-                    print("[READ IMBALANCE SPLIT DEBUG]: No reads detected.")
-
-        else:
-            # WRITE imbalance for individual files
-            imbalance_count = 0
-            detected_files = []  # will store [file_id, imbalance_percent]
-            for file_id in file_map.keys():
-                if file_id in shared_files:
-                    continue
-                #max_bytes_written = None
-                #min_bytes_written = None
-                df_detected = df_posix[(df_posix['file_id'] == file_id) & ~(df_posix['function'].str.contains('read'))]
-                if not df_detected.empty:
-                    max_bytes_written = df_detected['size'].max()
-                    min_bytes_written = df_detected['size'].min() #print the max bytes and the file id
-                    # Compute ratio only if max_bytes_written > 0
-                    ratio = abs(max_bytes_written - min_bytes_written) / max_bytes_written if max_bytes_written > 0 else 0
-                    print(f"[WRITE DEBUG] file_id={file_id}, max={max_bytes_written}, min={min_bytes_written}, ratio={ratio:.2f}")
-                    if ratio > thresholds['imbalance_size'][0]:
-                        imbalance_percent = ratio * 100
-                        imbalance_count += 1
-                        detected_files.append([file_id, imbalance_percent])
-            detected_files = pd.DataFrame(detected_files, columns=['id', 'write_imbalance'])
-            print("[WRITE IMBALANCE DEBUG]:", detected_files)
-            #check_individual_write_imbalance(imbalance_count, detected_files, file_map, dxt_posix, dxt_posix_write_data)
-
-            # READ imbalance for individual files 
-            imbalance_count = 0 #create a different imbalance counter and a detcted files counter for both reads and writes
-            detected_files = []  # reinitialize for reads
-            for file_id in shared_files:
-                max_bytes_read = None
-                min_bytes_read = None
-                df_detected = df_posix[(df_posix['file_id'] == file_id) & (df_posix['function'].str.contains('read'))]
-                if not df_detected.empty:
-                    max_bytes_read = df_detected['size'].max()
-                    min_bytes_read = df_detected['size'].min()
-                    ratio = abs(max_bytes_read - min_bytes_read) / max_bytes_read if max_bytes_read > 0 else 0
-                    print(f"[READ DEBUG] file_id={file_id}, max={max_bytes_read}, min={min_bytes_read}, ratio={ratio:.2f}")
-                    if ratio > thresholds['imbalance_size'][0]:
-                        imbalance_percent = ratio * 100
-                        imbalance_count += 1
-                        detected_files.append([file_id, imbalance_percent])
-            detected_files = pd.DataFrame(detected_files, columns=['id', 'read_imbalance'])
-            print("[READ IMBALANCE DEBUG]:", detected_files)
-            #check_individual_read_imbalance(imbalance_count, detected_files, file_map, dxt_posix, dxt_posix_read_data)
-        
-
-        # check_individual_write_imbalance(imbalance_count, df_detected_files[df_detected_files['operation_type'] == 'write'], file_map)
-        # check_individual_read_imbalance(imbalance_count, df_detected_files[df_detected_files['operation_type'] == 'read'], file_map)
-
-
         """
+            #check_shared_time_imbalance(stragglers_count, detected_files, file_map)
+                        
+        
         # Get the individual files responsible for imbalance
-        #max_bytes_read = None
-        #min_bytes_read = None
-        #max_bytes_written =0
-        #min_bytes_written =0
         if args.split_files:
             if df_posix['rank'].nunique() == 1:
                 df_detected = df_posix[~(df_posix['function'].str.contains('read'))]
-                
-                #df_writes = df_posix[~(df_posix['function'].str.contains('read'))]
-                #print("DEBUG: df_writes:")
-                #print(df_writes)
                 if not df_detected.empty:
                     max_bytes_written = df_detected['size'].max()
                     min_bytes_written = df_detected['size'].min()
                 #check_individual_write_imbalance_split(max_bytes_written, min_bytes_written)
 
             if df_posix['rank'].nunique() == 1:
-                df_detected = df_posix[(df_posix['function'].str.contains('read'))]
-                
+                df_detected = df_posix[(df_posix['function'].str.contains('read'))]                
                 if not df_detected.empty:
                     max_bytes_read = df_detected['size'].max()
                     min_bytes_read = df_detected['size'].min()
                 #check_individual_read_imbalance_split(max_bytes_read, min_bytes_read)
         else:
-            imbalance_count_write = 0
+            #imbalance_count_write = 0
             detected_files = []
             write_df_map = {}
             write_counters = {}
             for id in file_map.keys():
                 if id in shared_files: continue
-                df_detected_write = df_posix[(df_posix['file_id'] == id) & ~(df_posix['function'].str.contains('read'))]
-                if not df_detected_write.empty:
-                    write_df_map[id] = df_detected_write
-                    write_counters[id] = len(df_detected_write)
+                df_detected = df_posix[(df_posix['file_id'] == id) & ~(df_posix['function'].str.contains('read'))]
+                if not df_detected.empty:
+                    write_df_map[id] = {
+                    'df_detected': df_detected,
+                }
+                    write_counters[id] = len(df_detected)
                 
                 """
                 max_bytes_written = df_detected['size'].max()
@@ -759,15 +675,17 @@ def process_helper(file_map, df_intervals, df_posix_records, fid=None):
             #check_individual_write_imbalance(imbalance_count, detected_files, file_map)
 
             #imbalance_count = 0
-            imbalance_count_read = 0
+            #imbalance_count_read = 0
             detected_files = []
             read_df_map = {}
             read_counters = {}
             for id in shared_files:
-                df_detected_read = df_posix[(df_posix['file_id'] == id) & (df_posix['function'].str.contains('read'))]
-                if not df_detected_read.empty:
-                    read_df_map[id] = df_detected_read
-                    read_counters[id] = len(df_detected_read)
+                df_detected = df_posix[(df_posix['file_id'] == id) & (df_posix['function'].str.contains('read'))]
+                if not df_detected.empty:
+                    read_df_map[id] = {
+                    'df_detected': df_detected,
+                }
+                    read_counters[id] = len(df_detected)
                 
                 """
                 max_bytes_read = df_detected['size'].max()
@@ -807,6 +725,23 @@ def process_helper(file_map, df_intervals, df_posix_records, fid=None):
         if args.split_files:
             detected_files = pd.DataFrame()
         else:
+            collective_read_map = {}
+            for fid in file_map.keys():
+                indep_reads    = len(df_mpiio_reads[
+                    (~df_mpiio_reads['function'].str.contains('_all')) &
+                    (df_mpiio_reads['file_id'] == fid)
+                ])
+                coll_reads     = len(df_mpiio_reads[
+                    ( df_mpiio_reads['function'].str.contains('_all')) &
+                    (df_mpiio_reads['file_id'] == fid)
+                ])
+                total_mpi_reads = indep_reads + coll_reads
+
+                collective_read_map[fid] = {
+                    'indep_reads':     indep_reads,
+                    'total_mpi_reads': total_mpi_reads
+                }
+            """
             detected_files = []
             if mpiio_coll_reads == 0 and total_mpiio_read_operations and total_mpiio_read_operations > thresholds['collective_operations_absolute'][0]:
                 for id in file_map.keys():
@@ -820,13 +755,30 @@ def process_helper(file_map, df_intervals, df_posix_records, fid=None):
                         ])
 
             column_names = ['id', 'absolute_indep_reads', 'percent_indep_reads']
-            detected_files = pd.DataFrame(detected_files, columns=column_names)
-
+            detected_files = pd.DataFrame(detected_files, columns=column_names
+            """           
         #check_mpi_collective_read_operation(mpiio_coll_reads, mpiio_indep_reads, total_mpiio_read_operations, detected_files, file_map)
 
         if args.split_files:
             detected_files = pd.DataFrame()
         else:
+            collective_write_map = {}
+            for fid in file_map.keys():
+                indep_writes = len(df_mpiio_writes[
+                    (~df_mpiio_writes['function'].str.contains('_all')) &
+                    (df_mpiio_writes['file_id'] == fid)
+                ])
+                coll_writes  = len(df_mpiio_writes[
+                    ( df_mpiio_writes['function'].str.contains('_all')) &
+                    (df_mpiio_writes['file_id'] == fid)
+                ])
+                total_mpi_writes = indep_writes + coll_writes
+
+                collective_write_map[fid] = {
+                    'indep_writes':      indep_writes,
+                    'total_mpi_writes':  total_mpi_writes
+                }
+            """
             detected_files = []
             if mpiio_coll_writes == 0 and total_mpiio_write_operations and total_mpiio_write_operations > thresholds['collective_operations_absolute'][0]:
                 for id in file_map.keys():
@@ -841,7 +793,7 @@ def process_helper(file_map, df_intervals, df_posix_records, fid=None):
 
             column_names = ['id', 'absolute_indep_writes', 'percent_indep_writes']
             detected_files = pd.DataFrame(detected_files, columns=column_names)
-
+            """            
         #check_mpi_collective_write_operation(mpiio_coll_writes, mpiio_indep_writes, total_mpiio_write_operations, detected_files, file_map)
 
         #########################################################################################################################################################################
@@ -973,8 +925,8 @@ def process_helper(file_map, df_intervals, df_posix_records, fid=None):
         "total_operations": total_operations,
         "total_read_size": total_read_size,
         "total_written_size": total_written_size,
-        "total_reads_small": total_reads_small,
-        "total_writes_small": total_writes_small,
+        #"total_reads_small": 0,
+        #"total_writes_small": 0,
         #"total_mem_not_aligned": total_mem_not_aligned,
         #"total_file_not_aligned": total_file_not_aligned,
         "max_read_offset": max_read_offset,
@@ -1021,17 +973,9 @@ def process_helper(file_map, df_intervals, df_posix_records, fid=None):
     final_counters["count_long_metadata"] = count_long_metadata
     final_counters["stragglers_count"] = stragglers_count
 
-    #final_counters["imbalance_count"] = imbalance_count
-    final_counters["imbalance_count_write"] = imbalance_count_write
-    final_counters["imbalance_count_read"] = imbalance_count_read
-
     final_counters["has_hdf5_extension"] = has_hdf5_extension
     final_counters["hints"] = hints
-    #final_counters["cb_nodes"] = cb_nodes
-    #final_counters["NUMBER_OF_COMPUTE_NODES"] = NUMBER_OF_COMPUTE_NODES
-    #final_counters["job"] = job
-    #final_counters["job_start"] = job_start
-    #final_counters["job_end"] = job_end
+
     final_counters["total_files"] = total_files
     final_counters["total_files_stdio"] = total_files_stdio
     final_counters["total_files_posix"] = total_files_posix
@@ -1039,9 +983,19 @@ def process_helper(file_map, df_intervals, df_posix_records, fid=None):
     final_counters["df_intervals"] = df_intervals
     final_counters["df_posix"] = df_posix
 
+    #final_counters["read_sizes"] = read_sizes
+    #final_counters["write_sizes"] = write_sizes
+    #final_counters["read_size_map"]  = read_size_map
+    #final_counters["write_size_map"] = write_size_map
+    final_counters["small_map"] = small_map
+
+    final_counters["shared_time_map"] = shared_time_map
+    final_counters["shared_data_map"] = shared_data_map
     final_counters["write_df_map"] = write_df_map
     final_counters["write_counters"] = write_counters
     final_counters["read_df_map"] = read_df_map
     final_counters["read_counters"] = read_counters
+    final_counters["collective_read_map"] = collective_read_map
+    final_counters["collective_write_map"] = collective_write_map
     return final_counters
 

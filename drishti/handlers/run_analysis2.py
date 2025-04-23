@@ -107,8 +107,10 @@ def main():
     total_operations       = analysis.get_counter("total_operations") or 0
     total_read_size        = analysis.get_counter("total_read_size") or 0
     total_written_size     = analysis.get_counter("total_written_size") or 0
-    total_reads_small      = analysis.get_counter("total_reads_small") or 0
-    total_writes_small     = analysis.get_counter("total_writes_small") or 0
+    
+    #total_reads_small      = analysis.get_counter("total_reads_small") or 0
+    #total_writes_small     = analysis.get_counter("total_writes_small") or 0
+    
     total_mem_not_aligned  = analysis.get_counter("total_mem_not_aligned") or 0
     total_file_not_aligned = analysis.get_counter("total_file_not_aligned") or 0
     max_read_offset        = analysis.get_counter("max_read_offset") or 0
@@ -150,18 +152,27 @@ def main():
     detected_files_read    = analysis.get_counter("detected_files_read")
     detected_files_write   = analysis.get_counter("detected_files_write")
 
+    read_sizes             = analysis.get_counter("read_sizes") or []
+    write_sizes            = analysis.get_counter("write_sizes") or []
+    read_size_map          = analysis.get_counter("read_size_map") or {}
+    write_size_map         = analysis.get_counter("write_size_map") or {}
+    small_map              = analysis.get_counter("small_map") or {}
+
+    shared_data_map        = analysis.get_counter('shared_data_map') or {}
+    shared_time_map        = analysis.get_counter('shared_time_map') or {}
     write_df_map           = analysis.get_counter("write_df_map") or {}
-    write_counters         = analysis.get_counter("write_counters") or {}
     read_df_map            = analysis.get_counter("read_df_map") or {}
-    read_counters         = analysis.get_counter("read_counters") or {}
-    
+    collective_read_map    = analysis.get_counter("collective_read_map") or {}
+    collective_write_map   = analysis.get_counter("collective_write_map") or {}
+
     shared_files           = analysis.get_counter("shared_files")
     count_long_metadata    = analysis.get_counter("count_long_metadata") or 0
+    metadata_times         = analysis.get_counter("metadata_times") or []
     stragglers_count       = analysis.get_counter("stragglers_count") or 0
     
-    imbalance_count        = analysis.get_counter("imbalance_count") or 0
-    imbalance_count_read   = analysis.get_counter("imbalance_count_read") or 0
-    imbalance_count_write  = analysis.get_counter("imbalance_count_write") or 0
+    #imbalance_count        = analysis.get_counter("imbalance_count") or 0
+    #imbalance_count_read   = analysis.get_counter("imbalance_count_read") or 0
+    #imbalance_count_write  = analysis.get_counter("imbalance_count_write") or 0
 
     dxt_mpiio              = analysis.get_counter("dxt_mpiio")
     dxt_posix              = analysis.get_counter("dxt_posix")
@@ -185,6 +196,23 @@ def main():
     
     check_size_intensive(total_size, total_read_size, total_written_size)
     
+    small_thresh = thresholds['small_bytes'][0]
+    total_reads_small  = 0
+    total_writes_small = 0
+    small_records_list      = []
+
+    for fid, info in small_map.items():
+        r_cnt = sum(1 for sz in info["read_sizes"]  if sz < small_thresh)
+        w_cnt = sum(1 for sz in info["write_sizes"] if sz < small_thresh)
+        total_reads_small  += r_cnt
+        total_writes_small += w_cnt
+        small_records_list.append([fid, r_cnt, w_cnt])    
+    detected_files = pd.DataFrame(
+        small_records_list,
+        columns=['id', 'total_reads', 'total_writes']
+    )
+    print("Total Reads Small:", total_reads_small)
+    print("Total Writes Small:", total_writes_small)
     check_small_operation(total_reads, total_reads_small, total_writes, total_writes_small,
                           detected_files, modules, file_map, dxt_posix, dxt_posix_read_data, dxt_posix_write_data)
     
@@ -202,23 +230,66 @@ def main():
                                  total_shared_writes, total_shared_writes_small,
                                  shared_files, file_map)
     
+    count_long_metadata = sum(1 for t in metadata_times if t > thresholds['metadata_time_rank'][0])
     check_long_metadata(count_long_metadata, modules)
 
     check_shared_data_imblance_split(slowest_rank_bytes, fastest_rank_bytes, total_transfer_size)
     
-    check_shared_data_imblance(stragglers_count, detected_files, file_map,
-                               dxt_posix, dxt_posix_read_data, dxt_posix_write_data)
+    new_detected_data_list = []
+    for id, info in shared_data_map.items():
+        df_detected        = info['df_detected']
+        total_transfer_size = info['total_transfer_size']
+        slowest_rank_bytes = df_detected['size'].max()
+        fastest_rank_bytes = df_detected['size'].min()
+        if total_transfer_size and abs(slowest_rank_bytes - fastest_rank_bytes) / total_transfer_size > thresholds['imbalance_stragglers'][0]:
+            stragglers_count += 1
+            new_detected_data_list.append([
+                id,
+                abs(slowest_rank_bytes - fastest_rank_bytes) / total_transfer_size * 100
+            ])
+    if detected_files is None or not isinstance(detected_files, pd.DataFrame):
+        detected_files = pd.DataFrame(columns=['id','data_imbalance'])
+    column_names = ['id', 'data_imbalance']
+    new_detected_data_df  = pd.DataFrame(new_detected_data_list, columns=column_names)
+    if not detected_files.empty:
+        detected_files = pd.concat([detected_files, new_detected_data_df], ignore_index=True)
+    else:
+        detected_files = new_detected_data_df
+    check_shared_data_imblance(stragglers_count, detected_files, file_map, dxt_posix, dxt_posix_read_data, dxt_posix_write_data)
     
     check_shared_time_imbalance_split(slowest_rank_time, fastest_rank_time, total_transfer_time)
     
+    new_detected_time_list = []
+    for id, info in shared_time_map.items():
+        df_detected         = info['df_detected']
+        total_transfer_time = info['total_transfer_time']
+        slowest_rank_time = df_detected['duration'].max()
+        fastest_rank_time = df_detected['duration'].min()
+        if total_transfer_time and abs(slowest_rank_time - fastest_rank_time) / total_transfer_time > thresholds['imbalance_stragglers'][0]:
+            stragglers_count += 1
+            new_detected_time_list.append([
+                id,
+                abs(slowest_rank_time - fastest_rank_time) / total_transfer_time * 100
+            ])
+    if detected_files is None or not isinstance(detected_files, pd.DataFrame):
+        detected_files = pd.DataFrame(columns=['id','time_imbalance'])
+    column_names = ['id', 'time_imbalance']
+    new_detected_time_df  = pd.DataFrame(new_detected_time_list, columns=column_names)
+    if not detected_files.empty:
+        detected_files = pd.concat([detected_files, new_detected_time_df], ignore_index=True)
+    else:
+        detected_files = new_detected_time_df
     check_shared_time_imbalance(stragglers_count, detected_files, file_map)
 
     check_individual_write_imbalance_split(max_bytes_written, min_bytes_written)
 
     check_individual_read_imbalance_split(max_bytes_read, min_bytes_read)
     
+    
+    imbalance_count_write = 0
     new_detected_write_list = []
-    for file_id, df in write_df_map.items():
+    for file_id, info in write_df_map.items():
+        df       = info['df_detected']
         max_bytes_written = df['size'].max()
         min_bytes_written = df['size'].min()    
         if max_bytes_written and abs(max_bytes_written - min_bytes_written) / max_bytes_written > thresholds['imbalance_size'][0]:
@@ -235,9 +306,10 @@ def main():
         detected_files = new_detected_df
     check_individual_write_imbalance(imbalance_count_write, detected_files, file_map, dxt_posix, dxt_posix_write_data)
       
-    
+    imbalance_count_read = 0
     new_detected_read_list = []
-    for file_id, df in read_df_map.items():  
+    for file_id, info in read_df_map.items():  
+        df       = info['df_detected']
         max_bytes_read = df['size'].max()
         min_bytes_read = df['size'].min()
         if max_bytes_read and abs(max_bytes_read - min_bytes_read) / max_bytes_read > thresholds['imbalance_size'][0]:
@@ -253,9 +325,46 @@ def main():
     check_individual_read_imbalance(imbalance_count_read, detected_files, file_map, dxt_posix, dxt_posix_read_data)
     
     
+    new_detected_mpi_collective_read_list = []
+    if (mpiio_coll_reads == 0
+        and total_mpiio_read_operations > thresholds['collective_operations_absolute'][0]
+    ):
+        for fid, info in collective_read_map.items():
+            indep = info['indep_reads']
+            total = info['total_mpi_reads']
+            if total and indep / total > thresholds['collective_operations'][0] and total > thresholds['collective_operations_absolute'][0]:
+                new_detected_mpi_collective_read_list.append([
+                    fid,
+                    indep,
+                    indep / total * 100
+                ])
+    column_names   = ['id', 'absolute_indep_reads', 'percent_indep_reads']
+    new_detected_mpi_collective_read_df = pd.DataFrame(new_detected_mpi_collective_read_list, columns=column_names)
+    if detected_files is not None and not detected_files.empty:
+        detected_files = pd.concat([detected_files, new_detected_mpi_collective_read_df], ignore_index=True)
+    else:
+        detected_files = new_detected_mpi_collective_read_df
     check_mpi_collective_read_operation(mpiio_coll_reads, mpiio_indep_reads, total_mpiio_read_operations,
                                          detected_files, file_map, dxt_mpiio)
     
+    
+    new_detected_mpi_collective_write_list = []
+    if mpiio_coll_writes == 0 and total_mpiio_write_operations > thresholds['collective_operations_absolute'][0]:
+        for fid, info in collective_write_map.items():
+            indep_writes = info['indep_writes']
+            total_mpi_writes = info['total_mpi_writes']
+            if total_mpi_writes and indep_writes / total_mpi_writes > thresholds['collective_operations'][0] and total_writes > thresholds['collective_operations_absolute'][0]:
+                new_detected_mpi_collective_write_list.append([
+                    fid,
+                    indep_writes,
+                    indep_writes / total_mpi_writes * 100
+                ])
+    column_names         = ['id', 'absolute_indep_writes', 'percent_indep_writes']
+    new_detected_mpi_collective_write_df = pd.DataFrame(new_detected_mpi_collective_write_list, columns=column_names)
+    if detected_files is not None and not detected_files.empty:
+        detected_files = pd.concat([detected_files, new_detected_mpi_collective_write_df], ignore_index=True)
+    else:
+        detected_files = new_detected_mpi_collective_write_df
     check_mpi_collective_write_operation(mpiio_coll_writes, mpiio_indep_writes, total_mpiio_write_operations,
                                           detected_files, file_map, dxt_mpiio)
     
@@ -343,12 +452,8 @@ def main():
 
     print("max_bytes_written:", analysis.get_counter("max_bytes_written"))
     print("min_bytes_written:", analysis.get_counter("min_bytes_written"))
-    print("imbalance count write:", analysis.get_counter("imbalance_count_write"))
-    print("imbalance count read:", analysis.get_counter("imbalance_count_read"))
     print("detected_files:", analysis.get_counter("detected_files"))
-
-    print(df_intervals.head())
-
+    print("Count Long Metadata:", analysis.get_counter("count_long_metadata"))
     """
     #extra information 
     print("Has HDF5 Extension:", analysis.get_counter("has_hdf5_extension"))
