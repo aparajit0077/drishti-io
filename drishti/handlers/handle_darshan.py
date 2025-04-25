@@ -394,7 +394,7 @@ def handler():
             #check_size_intensive(total_size, total_read_size, total_written_size)
 
             #########################################################################################################################################################################
-
+            #todo: revise the message we provide the user for small requests in Darshan
             # Get the number of small I/O operations (less than 1 MB)
             total_reads_small = (
                 df['counters']['POSIX_SIZE_READ_0_100'].sum() +
@@ -1001,7 +1001,7 @@ def handler():
         final_counters["file_map"] = file_map
         final_counters["detected_files"] = detected_files
         final_counters["shared_files"] = shared_files
-        final_counters["count_long_metadata"] = 0
+        #final_counters["count_long_metadata"] = 0
         final_counters["metadata_times"]    = metadata_times
         final_counters["shared_data_map"] = shared_data_map
         final_counters["shared_time_map"] = shared_time_map

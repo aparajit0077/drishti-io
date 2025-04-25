@@ -405,29 +405,18 @@ def process_helper(file_map, df_intervals, df_posix_records, fid=None):
         #########################################################################################################################################################################
 
         # Get the number of small I/O operations (less than 1 MB)
-
-        #read_sizes  = df_posix[df_posix['function'].str.contains('read')]['size'].tolist()
-        #write_sizes = df_posix[~df_posix['function'].str.contains('read')]['size'].tolist()
         
-        """
-        total_reads_small = len(df_posix[(df_posix['function'].str.contains('read')) & (df_posix['size'] < thresholds['small_bytes'][0])])
-        total_writes_small = len(df_posix[~(df_posix['function'].str.contains('read')) & (df_posix['size'] < thresholds['small_bytes'][0])])
-        """
-        df_writes = df_posix[~(df_posix['function'].str.contains('read'))]
-        max_bytes_written = df_writes["size"].max()
-        min_bytes_written = df_writes["size"].min()
-        print("DEBUG: max_bytes_written =", max_bytes_written)
-        print("DEBUG: min_bytes_written =", min_bytes_written)
-
+        #total_reads_small = len(df_posix[(df_posix['function'].str.contains('read')) & (df_posix['size'] < thresholds['small_bytes'][0])])
+        #total_writes_small = len(df_posix[~(df_posix['function'].str.contains('read')) & (df_posix['size'] < thresholds['small_bytes'][0])])
+        
         if args.split_files:
             detected_files = pd.DataFrame()
         else:
             small_map = {}
-            for fid in file_map:
-                df_f = df_posix[df_posix['file_id'] == fid]
+            for fid, df_f in df_posix.groupby("file_id"):
                 small_map[fid] = {
-                    "read_sizes":  df_f[df_f['function'].str.contains("read") ]["size"].tolist(),
-                    "write_sizes": df_f[~df_f['function'].str.contains("read")]["size"].tolist()
+                    "read_sizes":  df_f[df_f["function"].str.contains("read")]["size"].tolist(),
+                    "write_sizes": df_f[~df_f["function"].str.contains("read")]["size"].tolist(),
                 }
             """
             detected_files = []
@@ -438,8 +427,7 @@ def process_helper(file_map, df_intervals, df_posix_records, fid=None):
 
             column_names = ['id', 'total_reads', 'total_writes']
             detected_files = pd.DataFrame(detected_files, columns=column_names)
-            """
-            
+            """                
         #check_small_operation(total_reads, total_reads_small, total_writes, total_writes_small, detected_files, modules, file_map)
 
         #########################################################################################################################################################################
@@ -507,18 +495,26 @@ def process_helper(file_map, df_intervals, df_posix_records, fid=None):
         shared_files = set(detected_files[detected_files > 1].index)
 
         total_shared_reads = len(df_posix[(df_posix['file_id'].isin(shared_files)) & (df_posix['function'].str.contains('read'))])
-        total_shared_reads_small = len(df_posix[(df_posix['file_id'].isin(shared_files)) 
-                                    & (df_posix['function'].str.contains('read')) 
-                                    & (df_posix['size'] < thresholds['small_bytes'][0])])
+        #total_shared_reads_small = len(df_posix[(df_posix['file_id'].isin(shared_files)) 
+                                    #& (df_posix['function'].str.contains('read')) 
+                                    #& (df_posix['size'] < thresholds['small_bytes'][0])])
         
         total_shared_writes = len(df_posix[(df_posix['file_id'].isin(shared_files)) & ~(df_posix['function'].str.contains('read'))])
-        total_shared_writes_small = len(df_posix[(df_posix['file_id'].isin(shared_files)) 
-                                    & ~(df_posix['function'].str.contains('read')) 
-                                    & (df_posix['size'] < thresholds['small_bytes'][0])])
+        #total_shared_writes_small = len(df_posix[(df_posix['file_id'].isin(shared_files)) 
+                                    #& ~(df_posix['function'].str.contains('read')) 
+                                    #& (df_posix['size'] < thresholds['small_bytes'][0])])
 
         if args.split_files:
             detected_files = pd.DataFrame()
         else:
+            shared_map = {}
+            for fid in shared_files:
+                df_f = df_posix[df_posix["file_id"] == fid]
+                shared_map[fid] = {
+                    "read_sizes":  df_f[df_f["function"].str.contains("read")]["size"].tolist(),
+                    "write_sizes": df_f[~df_f["function"].str.contains("read")]["size"].tolist(),
+                }
+            """
             detected_files = []
             for id in shared_files:
                 read_cnt = len(df_posix[(df_posix['file_id'] == id) 
@@ -532,14 +528,16 @@ def process_helper(file_map, df_intervals, df_posix_records, fid=None):
             column_names = ['id', 'INSIGHTS_POSIX_SMALL_READS', 'INSIGHTS_POSIX_SMALL_WRITES']
             detected_files = pd.DataFrame(detected_files, columns=column_names)
 
+            """
+            
         #check_shared_small_operation(total_shared_reads, total_shared_reads_small, total_shared_writes, total_shared_writes_small, detected_files, file_map)
 
         #########################################################################################################################################################################
 
         # TODO: Assumed metadata operations: open, close, sync, create, seek
         df_detected = df_posix_records.groupby('rank')['duration'].sum().reset_index()
-        count_long_metadata = len(df_detected[(df_detected['duration'] > thresholds['metadata_time_rank'][0])])
-
+        #count_long_metadata = len(df_detected[(df_detected['duration'] > thresholds['metadata_time_rank'][0])])
+        metadata_times = df_detected['duration'].tolist()
         #check_long_metadata(count_long_metadata, modules)
   
         # We already have a single line for each shared-file access
@@ -646,7 +644,7 @@ def process_helper(file_map, df_intervals, df_posix_records, fid=None):
             #imbalance_count_write = 0
             detected_files = []
             write_df_map = {}
-            write_counters = {}
+            #write_counters = {}
             for id in file_map.keys():
                 if id in shared_files: continue
                 df_detected = df_posix[(df_posix['file_id'] == id) & ~(df_posix['function'].str.contains('read'))]
@@ -654,8 +652,8 @@ def process_helper(file_map, df_intervals, df_posix_records, fid=None):
                     write_df_map[id] = {
                     'df_detected': df_detected,
                 }
-                    write_counters[id] = len(df_detected)
-                
+                    #write_counters[id] = len(df_detected)
+
                 """
                 max_bytes_written = df_detected['size'].max()
                 min_bytes_written = df_detected['size'].min()
@@ -678,14 +676,14 @@ def process_helper(file_map, df_intervals, df_posix_records, fid=None):
             #imbalance_count_read = 0
             detected_files = []
             read_df_map = {}
-            read_counters = {}
+            #read_counters = {}
             for id in shared_files:
                 df_detected = df_posix[(df_posix['file_id'] == id) & (df_posix['function'].str.contains('read'))]
                 if not df_detected.empty:
                     read_df_map[id] = {
                     'df_detected': df_detected,
                 }
-                    read_counters[id] = len(df_detected)
+                    #read_counters[id] = len(df_detected)
                 
                 """
                 max_bytes_read = df_detected['size'].max()
@@ -925,8 +923,8 @@ def process_helper(file_map, df_intervals, df_posix_records, fid=None):
         "total_operations": total_operations,
         "total_read_size": total_read_size,
         "total_written_size": total_written_size,
-        #"total_reads_small": 0,
-        #"total_writes_small": 0,
+        #"total_reads_small": total_reads_small,
+        #"total_writes_small": total_writes_small,
         #"total_mem_not_aligned": total_mem_not_aligned,
         #"total_file_not_aligned": total_file_not_aligned,
         "max_read_offset": max_read_offset,
@@ -938,9 +936,9 @@ def process_helper(file_map, df_intervals, df_posix_records, fid=None):
         "write_sequential": write_sequential,
         "write_random": write_random,
         "total_shared_reads": total_shared_reads,
-        "total_shared_reads_small": total_shared_reads_small,
+        #"total_shared_reads_small": total_shared_reads_small,
         "total_shared_writes": total_shared_writes,
-        "total_shared_writes_small": total_shared_writes_small,
+        #"total_shared_writes_small": total_shared_writes_small,
         "slowest_rank_bytes": slowest_rank_bytes, 
         "fastest_rank_bytes": fastest_rank_bytes,
         "total_transfer_size": total_transfer_size,
@@ -970,7 +968,7 @@ def process_helper(file_map, df_intervals, df_posix_records, fid=None):
     #final_counters["detected_files_write"] = detected_files_write
 
     final_counters["shared_files"] = shared_files
-    final_counters["count_long_metadata"] = count_long_metadata
+    #final_counters["count_long_metadata"] = count_long_metadata
     final_counters["stragglers_count"] = stragglers_count
 
     final_counters["has_hdf5_extension"] = has_hdf5_extension
@@ -983,19 +981,16 @@ def process_helper(file_map, df_intervals, df_posix_records, fid=None):
     final_counters["df_intervals"] = df_intervals
     final_counters["df_posix"] = df_posix
 
-    #final_counters["read_sizes"] = read_sizes
-    #final_counters["write_sizes"] = write_sizes
-    #final_counters["read_size_map"]  = read_size_map
-    #final_counters["write_size_map"] = write_size_map
     final_counters["small_map"] = small_map
-
+    final_counters["shared_map"] = shared_map
     final_counters["shared_time_map"] = shared_time_map
     final_counters["shared_data_map"] = shared_data_map
     final_counters["write_df_map"] = write_df_map
-    final_counters["write_counters"] = write_counters
+    #final_counters["write_counters"] = write_counters
     final_counters["read_df_map"] = read_df_map
-    final_counters["read_counters"] = read_counters
+    #final_counters["read_counters"] = read_counters
     final_counters["collective_read_map"] = collective_read_map
     final_counters["collective_write_map"] = collective_write_map
+    final_counters["metadata_times"] = metadata_times
     return final_counters
 
